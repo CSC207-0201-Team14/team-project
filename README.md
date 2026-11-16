@@ -173,67 +173,34 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 ## Entities
 
-### Entity 1
+| Type | Responsibility |
+| --- | --- |
+| `MonitoredSystem` | Owns the service roster and directed dependency graph. Service IDs and case-insensitive names are unique within the system. Dependency IDs and edges are unique, and both endpoints must belong to the system. |
+| `Service` | Stores its ID, system ID, name, monitoring target, and monitoring policy. |
+| `Dependency` | Identifies a directed relationship from the dependent service to the required service. Self-dependencies are invalid. Multi-service cycles are allowed, so graph traversal must track visited services. |
+| `HealthCheckResult` | Records a timestamped `PASS`, `FAIL`, or `MONITORING_ERROR`, with optional response time and a message. |
+| `FailureEvent` | Records a transition into unhealthy status with the failed checks that support it. The monitoring use case determines when the failure threshold is crossed. |
+| `DiagnosticFinding` | Records the rule, affected service, optional suspected cause, observation IDs, dependency evidence, explanation, and next steps. Dependency evidence retains the edges used in the diagnosis. |
+| `Incident` | Tracks observed failures, potential impact, current and historical findings, and the `OPEN`, `INVESTIGATING`, and `RESOLVED` lifecycle. |
+| `RecoveryAction` | Describes a supported operation and its target within an incident. Every executable action requires explicit confirmation. |
+| `RecoveryAttempt` | Records when an action ran and whether it succeeded, failed, or was denied. |
 
-**MonitoredSystem**
+`MonitoringTarget` represents either an HTTP(S) endpoint or a Docker container ID. `MonitoringPolicy` supplies the check interval, timeout, failure threshold, and recovery threshold. `ServiceHealth` keeps evaluated health separate from service configuration. A service starts at `UNKNOWN`, and a monitoring error yields `UNKNOWN`.
 
-Represents the application being monitored and groups its registered services.
+An incident can be investigated with an unknown cause. Diagnostic rules can replace the active assessment with findings using fresh IDs while the incident preserves past findings for review. Manual troubleshooting instructions belong in a finding's next steps.
 
-- Attributes: `id`, `name`, `description`, `serviceIds`.
+The recovery use case must confirm the action before execution, verify the selected target, and evaluate follow-up checks against the configured recovery threshold. The incident requires fresh passing observations for services with recorded failures, services flagged as potentially affected in the current assessment, and active suspected causes. It retains the passing checks used to resolve it.
 
-### Entity 2
+---
 
-**Service**
 
-Represents an application component, such as an API or database, and its monitoring configuration.
+### Running the domain checks
 
-- Attributes: `id`, `systemId`, `name`, `monitoringConfig`, `currentHealth`.
-- The monitoring configuration includes the method, endpoint or container ID, check interval, timeout, and failure threshold.
-- Health states: `HEALTHY`, `UNHEALTHY`, `UNKNOWN`.
+Compile the main and test classes with `mvn test-compile`. Run the dependency-free checks from the project root.
 
-### Entity 3
+- PowerShell or Command Prompt: `java -cp "target/classes;target/test-classes" entity.DomainChecks`
+- macOS or Linux: `java -cp "target/classes:target/test-classes" entity.DomainChecks`
 
-**Dependency**
-
-Represents a directed relationship in which one service depends on another.
-
-- Attributes: `id`, `dependentServiceId`, `requiredServiceId`.
-
-### Entity 4
-
-**HealthCheckResult**
-
-Records one monitoring observation for a service and can provide evidence for an incident.
-
-- Attributes: `id`, `serviceId`, `timestamp`, `outcome`, `responseTimeMs`, `message`.
-- Outcomes: `PASS`, `FAIL`, `MONITORING_ERROR`.
-- Response time is optional for monitoring methods where it is not applicable.
-
-### Entity 5
-
-**Incident**
-
-Tracks a problem, its suspected cause, supporting observations, affected services, and resolution.
-
-- Attributes: `id`, `systemId`, `status`, `openedAt`, `resolvedAt`, `suspectedCauseServiceId`, `failingServiceIds`, `potentiallyAffectedServiceIds`, `evidenceIds`.
-- Statuses: `OPEN`, `INVESTIGATING`, `RESOLVED`.
-- Evidence references health check results. A suspected cause may be unknown, and a resolution time is recorded only after resolution.
-
-### Entity 6
-
-**RecoveryAction**
-
-Describes a proposed recovery action for a service associated with an incident.
-
-- Attributes: `id`, `incidentId`, `targetServiceId`, `actionType`, `description`, `requiresConfirmation`.
-
-### Entity 7
-
-**RecoveryAttempt**
-
-Records the outcome of an attempt to execute a recovery action. Successful execution does not by itself mean that the incident is resolved.
-
-- Attributes: `id`, `actionId`, `startedAt`, `completedAt`, `outcome`, `message`.
 
 ---
 

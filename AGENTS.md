@@ -28,7 +28,7 @@ These are proposed use-case boundaries, not a mandate to implement all optional 
 
 This course project **must attempt to follow Clean Architecture and SOLID principles**, and the team must be able to explain and justify design decisions at the final presentation.
 
-- **Entities/domain:** Represent core business concepts and invariants independently of presentation and infrastructure. Examples: `MonitoredSystem`, `Service`, `ServiceDependency`, `HealthObservation`, `FailureEvent`, `DiagnosticFinding`, `Incident`.
+- **Entities/domain:** Represent core business concepts and invariants independently of presentation and infrastructure. Examples: `MonitoredSystem`, `Service`, `Dependency`, `HealthCheckResult`, `FailureEvent`, `DiagnosticFinding`, `Incident`.
 - **Use cases/application:** Implement actions such as configuring systems, recording observations, diagnosing failures, and managing incidents. Coordinate domain logic through ports/interfaces.
 - **Interface adapters:** Map Swing inputs to use-case input data, present output data to Swing views, and translate external data into domain objects.
 - **Frameworks/infrastructure:** Implement Docker/HTTP clients, JSON repositories, and other I/O behind interfaces defined by inner layers.
@@ -69,6 +69,14 @@ For each nontrivial pattern introduced:
 4. Cover relevant behavior with tests and briefly document the design rationale in the PR or project documentation, so the team can justify it during the final presentation.
 
 Patterns must **respect Clean Architecture's dependency direction**. For example, an Adapter belongs in the outer layer, and a Strategy interface used by domain/application logic must not import its infrastructure implementations.
+
+## Shared domain model
+
+- Keep service configuration in `MonitoredSystem` and `Service`. Store evaluated health separately in `ServiceHealth`. Use `MonitoringTarget` for an HTTP(S) endpoint or Docker container ID and `MonitoringPolicy` for intervals, timeouts, and failure and recovery thresholds.
+- Represent observations as `HealthCheckResult` and threshold crossings into unhealthy status as `FailureEvent`. A monitoring error yields unknown health.
+- Store suspected causes in `DiagnosticFinding`, alongside supporting observation IDs and dependency evidence. Preserve historical findings when updating the incident's active assessment.
+- Require explicit confirmation for every executable `RecoveryAction`. Record execution in `RecoveryAttempt`. Resolve an incident after threshold-based verification with fresh passing checks. Keep manual instructions in a finding's next steps.
+
 
 ## Diagnostic and incident rules
 
