@@ -164,10 +164,10 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 | Team Member | MVP Use Case                                               |
 | ----------- | ---------------------------------------------------------- |
-| TBA         | Use Case 1: Configure systems, services, and dependencies  |
-| TBA         | Use Case 2: Run health checks and display health history   |
-| TBA         | Use Case 3: Detect incidents and explain suspected causes  |
-| TBA         | Use Case 4: Execute recovery actions and verify resolution |
+| Brian Jeen         | Use Case 1: Configure systems, services, and dependencies  |
+| Chelsea Wu         | Use Case 2: Run health checks and display health history   |
+| Jiaming Zhang | Use Case 3: Detect incidents and explain suspected causes  |
+| Corey Dai  | Use Case 4: Execute recovery actions and verify resolution |
 
 ---
 
