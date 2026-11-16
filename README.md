@@ -1,32 +1,54 @@
 # Sentinel
+
 ## Team Information
+
 ### Team Members
+
 - Corey Keyu Dai
 - Brian Jeen
 - Jiaming Zhang
 - Chelsea Wu
+
 ---
+
 ## Project Description
+
 ### Domain
+
 Productivity
+
 ### Description
+
 Sentinel is a desktop application that helps developers monitor the health of services in a software system, understand their dependencies, and investigate failures.
 Users can register HTTP services and Docker containers, view their health and dependency relationships, and investigate incidents with supporting evidence and suspected causes.
 For supported services, users can confirm recovery actions and verify that the affected services have recovered.
+
 ---
+
 ## User Stories
+
 ### User Story 1
-As a developer, I want to register my services and their dependencies, so that Sentinel understands how my application is connected.
+
+As a developer, I want to register my services and their dependencies, so that I can centralize configuration and visuzlize dependencies.
+
 ### User Story 2
+
 As a developer, I want to see current and recent service health, so that I can identify availability problems.
+
 ### User Story 3
+
 As a developer, I want related failures grouped into an incident with supporting evidence, so that I can understand the suspected cause and potential impact.
+
 ### User Story 4
+
 As a developer, I want to perform a supported recovery action and verify its result, so that I know whether the incident is resolved.
 
 ---
+
 ## Use Cases
+
 ### Use Case 1
+
 **Name:** Configure a Monitored System
 
 **Primary actor:** Developer.
@@ -52,6 +74,7 @@ As a developer, I want to perform a supported recovery action and verify its res
 **Success outcome:** A valid monitored system, its services, and their dependencies are saved and available for monitoring.
 
 ### Use Case 2
+
 **Name:** Monitor Service Health
 
 **Primary actor:** Developer.
@@ -79,6 +102,7 @@ As a developer, I want to perform a supported recovery action and verify its res
 **Success outcome:** The developer can inspect current service health and recorded observations, with updates continuing while monitoring is active.
 
 ### Use Case 3
+
 **Name:** Investigate an Incident
 
 **Primary actor:** Developer.
@@ -105,6 +129,7 @@ As a developer, I want to perform a supported recovery action and verify its res
 **Success outcome:** The developer can identify the recorded failures, inspect the evidence behind any suspected cause, and review available next steps. Investigation alone does not resolve the incident.
 
 ### Use Case 4
+
 **Name:** Recover a Service and Verify Resolution
 
 **Primary actor:** Developer.
@@ -134,16 +159,22 @@ As a developer, I want to perform a supported recovery action and verify its res
 **Success outcome:** The target service and affected dependent services satisfy the configured recovery criteria, and the incident is recorded as resolved with the recovery attempt retained.
 
 ---
+
 ## Minimal Viable Product (MVP)
-| Team Member | MVP Use Case |
-|-------------|--------------|
-| TBA | Use Case 1: Configure systems, services, and dependencies |
-| TBA | Use Case 2: Run health checks and display health history |
-| TBA | Use Case 3: Detect incidents and explain suspected causes |
-| TBA | Use Case 4: Execute recovery actions and verify resolution |
+
+| Team Member | MVP Use Case                                               |
+| ----------- | ---------------------------------------------------------- |
+| TBA         | Use Case 1: Configure systems, services, and dependencies  |
+| TBA         | Use Case 2: Run health checks and display health history   |
+| TBA         | Use Case 3: Detect incidents and explain suspected causes  |
+| TBA         | Use Case 4: Execute recovery actions and verify resolution |
+
 ---
+
 ## Entities
+
 ### Entity 1
+
 **MonitoredSystem**
 
 Represents the application being monitored and groups its registered services.
@@ -151,6 +182,7 @@ Represents the application being monitored and groups its registered services.
 - Attributes: `id`, `name`, `description`, `serviceIds`.
 
 ### Entity 2
+
 **Service**
 
 Represents an application component, such as an API or database, and its monitoring configuration.
@@ -160,6 +192,7 @@ Represents an application component, such as an API or database, and its monitor
 - Health states: `HEALTHY`, `UNHEALTHY`, `UNKNOWN`.
 
 ### Entity 3
+
 **Dependency**
 
 Represents a directed relationship in which one service depends on another.
@@ -167,6 +200,7 @@ Represents a directed relationship in which one service depends on another.
 - Attributes: `id`, `dependentServiceId`, `requiredServiceId`.
 
 ### Entity 4
+
 **HealthCheckResult**
 
 Records one monitoring observation for a service and can provide evidence for an incident.
@@ -176,6 +210,7 @@ Records one monitoring observation for a service and can provide evidence for an
 - Response time is optional for monitoring methods where it is not applicable.
 
 ### Entity 5
+
 **Incident**
 
 Tracks a problem, its suspected cause, supporting observations, affected services, and resolution.
@@ -185,6 +220,7 @@ Tracks a problem, its suspected cause, supporting observations, affected service
 - Evidence references health check results. A suspected cause may be unknown, and a resolution time is recorded only after resolution.
 
 ### Entity 6
+
 **RecoveryAction**
 
 Describes a proposed recovery action for a service associated with an incident.
@@ -192,25 +228,37 @@ Describes a proposed recovery action for a service associated with an incident.
 - Attributes: `id`, `incidentId`, `targetServiceId`, `actionType`, `description`, `requiresConfirmation`.
 
 ### Entity 7
+
 **RecoveryAttempt**
 
 Records the outcome of an attempt to execute a recovery action. Successful execution does not by itself mean that the incident is resolved.
 
 - Attributes: `id`, `actionId`, `startedAt`, `completedAt`, `outcome`, `message`.
+
 ---
+
 ## API Usage
+
 **API Name:**
 **Documentation:** [Link]
 **How it is used in the program:**
+
 ---
+
 ## Design Diagrams
+
 ### UML Class Diagram
+
 ### Sequence Diagrams
 
 ---
+
 ## How to Run
+
 [Instructions for running the program.]
 
 ---
+
 ## Notes
+
 [Any additional project information.]
