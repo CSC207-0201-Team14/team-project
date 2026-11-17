@@ -2,6 +2,7 @@ package use_case.investigate_incident;
 
 import data_access.InMemoryIncidentRepository;
 import entity.*;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.UUID;
 /** Dependency-free checks, following entity.DomainChecks. */
 public final class IncidentContractChecks {
     private static final Instant TIME = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Clock CLOCK = Clock.fixed(TIME.plusSeconds(5), java.time.ZoneOffset.UTC);
 
     public static void main(String[] args) {
         verifiesProcessingAndInvestigationPath();
@@ -44,7 +46,11 @@ public final class IncidentContractChecks {
         check(details.getObservations().keySet().equals(Set.of(fixture.failed.getId(), fixture.passed.getId())),
                 "Details combine retained failure evidence with historical observation lookup");
         check(details.getMissingObservationIds().isEmpty(), "All evidence is available");
-        check(details.getIncident().getStatus() == Incident.Status.OPEN, "Opening details preserves status");
+        check(details.getIncident().getStatus() == Incident.Status.INVESTIGATING
+                && details.getIncident().getInvestigatingAt().orElseThrow().equals(CLOCK.instant()),
+                "Opening an open incident starts investigation at the current time");
+        check(fixture.repository.findById(fixture.assessed.getId()).orElseThrow().getStatus()
+                == Incident.Status.INVESTIGATING, "The investigating status is saved");
         check(details.getRecommendedActions().size() == 1
                 && details.getRecommendedActions().get(0).getTargetServiceId().equals(fixture.serviceId)
                 && details.getRecommendedActions().get(0).getActionType()
@@ -53,8 +59,11 @@ public final class IncidentContractChecks {
         check(details.getIncident().getActiveFindings().isEmpty()
                 && details.getIncident().getFindingHistory().size() == 1, "Historical findings remain inspectable");
 
+        Incident investigating = fixture.repository.findById(fixture.assessed.getId()).orElseThrow();
         fixture.retained.clear();
         fixture.boundary.openIncident(fixture.assessed.getId());
+        check(fixture.output.details.getIncident() == investigating,
+                "Reopening an investigating incident leaves it unchanged");
         check(fixture.output.details.getMissingObservationIds().equals(Set.of(fixture.passed.getId())),
                 "Missing historical evidence is explicit");
         fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(fixture.system, "Graph unavailable");
@@ -83,12 +92,24 @@ public final class IncidentContractChecks {
         };
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
                 ids -> Map.of(), failingRepository, (input, configuration, unresolved) -> fixture.assessed,
-                new RecoveryRecommendationProvider(), fixture.output);
+                new RecoveryRecommendationProvider(), CLOCK, fixture.output);
         boundary.processFailure(fixture.input());
         check(fixture.output.error.equals("Save failed") && fixture.output.processed == null,
                 "Save failure is reported without publishing success");
         boundary.openIncident(fixture.assessed.getId());
         check(fixture.output.error.equals("Read failed"), "Read failure is reported");
+
+        IncidentRepository unsavable = new IncidentRepository() {
+            public Optional<Incident> findById(UUID id) { return Optional.of(fixture.assessed); }
+            public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
+            public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
+        };
+        fixture.output.error = null;
+        new IncidentInteractor(id -> Optional.of(fixture.configuration), ids -> Map.of(), unsavable,
+                (input, configuration, unresolved) -> fixture.assessed, new RecoveryRecommendationProvider(),
+                CLOCK, fixture.output).openIncident(fixture.assessed.getId());
+        check("Save failed".equals(fixture.output.error) && fixture.output.details == null,
+                "Failing to save the investigating status presents an error instead of details");
     }
 
     private static void verifiesRepositoryScopeAndReplacement() {
@@ -148,7 +169,7 @@ public final class IncidentContractChecks {
                 seenConfiguration = snapshot;
                 seenUnresolved = unresolved;
                 return assessed; // Fixed test output; diagnosis/correlation arrive in later stages.
-            }, new RecoveryRecommendationProvider(), output);
+            }, new RecoveryRecommendationProvider(), CLOCK, output);
         }
 
         private FailureInput input() { return new FailureInput(system.getId(), failure, List.of(failed)); }

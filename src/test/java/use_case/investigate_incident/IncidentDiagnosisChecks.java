@@ -157,7 +157,7 @@ public final class IncidentDiagnosisChecks {
         CapturingOutput output = new CapturingOutput();
         IncidentInputBoundary boundary = new IncidentInteractor(id -> java.util.Optional.of(fixture.configuration),
                 ids -> java.util.Map.of(), repository, fixture.assessment(),
-                new RecoveryRecommendationProvider(), output);
+                new RecoveryRecommendationProvider(), CLOCK, output);
         FailureInput db = fixture.input(failure(fixture.db, 70));
         boundary.processFailure(db);
         UUID incidentId = output.incident.getId();
@@ -169,7 +169,12 @@ public final class IncidentDiagnosisChecks {
         check(output.details.getIncident().getFailingServiceIds().equals(Set.of(fixture.db, fixture.api)),
                 "Real strategies work through the normal input boundary and repository");
         check(output.details.getMissingObservationIds().isEmpty(), "Failure evidence supports diagnosis detail lookup");
-        check(output.details.getIncident().getStatus() == Incident.Status.OPEN, "Diagnosis and reading do not resolve incidents");
+        check(output.details.getIncident().getStatus() == Incident.Status.INVESTIGATING,
+                "Opening starts investigation without resolving the incident");
+        boundary.processFailure(fixture.input(failure(fixture.api, 85)));
+        check(repository.findById(incidentId).orElseThrow().getStatus() == Incident.Status.INVESTIGATING
+                && output.incident.getId().equals(incidentId),
+                "Later correlated failures keep the incident under investigation");
         check(repository.findUnresolvedBySystemId(fixture.systemId).size() == 1, "Repeated delivery does not duplicate incidents");
     }
 

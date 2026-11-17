@@ -6,6 +6,9 @@ import java.util.UUID;
 public interface IncidentInputBoundary {
     void processFailure(FailureInput input);
 
-    /** Reads details without changing incident status or executing recovery. */
+    /**
+     * Moves an OPEN incident to INVESTIGATING and saves it before presenting details.
+     * Other statuses are unchanged. Never resolves the incident or executes recovery.
+     */
     void openIncident(UUID incidentId);
 }

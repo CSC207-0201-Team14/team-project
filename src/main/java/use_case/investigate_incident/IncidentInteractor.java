@@ -3,6 +3,7 @@ package use_case.investigate_incident;
 import entity.HealthCheckResult;
 import entity.Incident;
 import entity.RecoveryAction;
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -19,16 +20,19 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     private final IncidentRepository incidents;
     private final IncidentAssessment assessment;
     private final RecoveryRecommendationProvider recommendations;
+    private final Clock clock;
     private final IncidentOutputBoundary output;
 
     public IncidentInteractor(ConfigurationReader configurations, ObservationReader observations,
                               IncidentRepository incidents, IncidentAssessment assessment,
-                              RecoveryRecommendationProvider recommendations, IncidentOutputBoundary output) {
+                              RecoveryRecommendationProvider recommendations, Clock clock,
+                              IncidentOutputBoundary output) {
         this.configurations = configurations;
         this.observations = observations;
         this.incidents = incidents;
         this.assessment = assessment;
         this.recommendations = recommendations;
+        this.clock = clock;
         this.output = output;
     }
 
@@ -69,6 +73,11 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                 return;
             }
             Incident incident = stored.get();
+            if (incident.getStatus() == Incident.Status.OPEN) {
+                incident = incident.startInvestigation(clock.instant());
+                incidents.save(incident);
+            }
+            Incident opened = incident;
             Map<UUID, HealthCheckResult> evidence = new HashMap<>();
             incident.getFailures().forEach(failure -> failure.getEvidence().forEach(result ->
                     evidence.put(result.getId(), result)));
@@ -85,9 +94,9 @@ public final class IncidentInteractor implements IncidentInputBoundary {
             }
             missing.removeAll(evidence.keySet());
             List<RecoveryAction> recommended = configurations.findBySystemId(incident.getSystemId())
-                    .map(configuration -> recommendations.recommend(incident, configuration))
+                    .map(configuration -> recommendations.recommend(opened, configuration))
                     .orElse(List.of());
-            details = new IncidentDetails(incident, evidence, missing, recommended);
+            details = new IncidentDetails(opened, evidence, missing, recommended);
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
             return;
