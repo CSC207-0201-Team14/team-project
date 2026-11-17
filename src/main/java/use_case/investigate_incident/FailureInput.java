@@ -1,4 +1,4 @@
-package use_case.incident;
+package use_case.investigate_incident;
 
 import entity.FailureEvent;
 import entity.HealthCheckResult;
