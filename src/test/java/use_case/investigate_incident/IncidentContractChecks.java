@@ -34,11 +34,13 @@ public final class IncidentContractChecks {
         FailureInput input = new FailureInput(fixture.system.getId(), fixture.failure, recent);
         recent.clear();
         check(input.getRecentObservations().size() == 1, "Input must copy the observation list");
-        fixture.boundary.processFailure(input);
+        check(fixture.boundary.processFailure(input) == FailureProcessingResult.PROCESSED,
+                "A saved assessment reports PROCESSED");
         check(fixture.output.processed == fixture.assessed, "Assessment output reaches presenter");
         check(fixture.repository.findById(fixture.assessed.getId()).orElseThrow() == fixture.assessed,
                 "Assessment must be saved before presenting success");
-        fixture.boundary.processFailure(input);
+        check(fixture.boundary.processFailure(input) == FailureProcessingResult.PROCESSED,
+                "Redelivering the same event reports PROCESSED");
         check(fixture.seenUnresolved.size() == 1, "Next call receives the saved unresolved incident");
         check(fixture.repository.findUnresolvedBySystemId(fixture.system.getId()).size() == 1,
                 "Saving the same incident ID replaces it");
@@ -79,11 +81,13 @@ public final class IncidentContractChecks {
         fixture.boundary.openIncident(UUID.randomUUID());
         check(fixture.output.error.equals("Incident was not found"), "Missing incident is presented");
         fixture.configuration = null;
-        fixture.boundary.processFailure(fixture.input());
+        check(fixture.boundary.processFailure(fixture.input()) == FailureProcessingResult.REJECTED,
+                "A missing system is not retryable");
         check(fixture.output.error.equals("Monitored system was not found"), "Missing system is presented");
         fixture.configuration = ConfigurationSnapshot.available(fixture.system);
         HealthCheckResult foreign = result(UUID.randomUUID(), HealthCheckResult.Outcome.FAIL);
-        fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), fixture.failure, List.of(foreign)));
+        check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), fixture.failure,
+                List.of(foreign))) == FailureProcessingResult.REJECTED, "Foreign services are not retryable");
         check(fixture.output.error.contains("outside"), "Foreign observations are rejected");
         check(fixture.output.processed == null, "Invalid input cannot report success");
 
@@ -95,9 +99,20 @@ public final class IncidentContractChecks {
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
                 ids -> Map.of(), failingRepository, (input, configuration, unresolved) -> fixture.assessed,
                 new RecoveryRecommendationProvider(), CLOCK, fixture.output);
-        boundary.processFailure(fixture.input());
+        check(boundary.processFailure(fixture.input()) == FailureProcessingResult.RETRYABLE,
+                "A storage failure is retryable");
         check(fixture.output.error.equals("Save failed") && fixture.output.processed == null,
                 "Save failure is reported without publishing success");
+
+        InMemoryIncidentRepository untouched = new InMemoryIncidentRepository();
+        IncidentInputBoundary invalid = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                ids -> Map.of(), untouched, (input, configuration, unresolved) -> {
+                    throw new IllegalArgumentException("failure is in the future");
+                }, new RecoveryRecommendationProvider(), CLOCK, fixture.output);
+        check(invalid.processFailure(fixture.input()) == FailureProcessingResult.REJECTED
+                && fixture.output.error.contains("failure is in the future")
+                && untouched.findUnresolvedBySystemId(fixture.system.getId()).isEmpty(),
+                "Invalid assessment input is rejected, presented and not saved instead of escaping");
         boundary.openIncident(fixture.assessed.getId());
         check(fixture.output.error.equals("Read failed"), "Read failure is reported");
 

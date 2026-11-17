@@ -164,7 +164,8 @@ public final class IncidentDiagnosisChecks {
         check(output.incident.getPotentiallyAffectedServiceIds().equals(Set.of(fixture.api, fixture.web)),
                 "Potential impact is derived separately from observed failures");
         boundary.processFailure(fixture.input(failure(fixture.api, 80)));
-        boundary.processFailure(db);
+        check(boundary.processFailure(db) == FailureProcessingResult.PROCESSED,
+                "Redelivering a stored event with real strategies reports PROCESSED");
         boundary.openIncident(incidentId);
         check(output.details.getIncident().getFailingServiceIds().equals(Set.of(fixture.db, fixture.api)),
                 "Real strategies work through the normal input boundary and repository");
@@ -172,6 +173,11 @@ public final class IncidentDiagnosisChecks {
         check(output.details.getIncident().getStatus() == Incident.Status.INVESTIGATING,
                 "Opening starts investigation without resolving the incident");
         boundary.processFailure(fixture.input(failure(fixture.api, 85)));
+        output.expectError = true;
+        check(boundary.processFailure(fixture.input(failure(fixture.api, 150))) == FailureProcessingResult.REJECTED
+                && output.error.startsWith("Failure input could not be assessed"),
+                "A failure after the assessment time is rejected and presented instead of escaping");
+        output.expectError = false;
         check(repository.findById(incidentId).orElseThrow().getStatus() == Incident.Status.INVESTIGATING
                 && output.incident.getId().equals(incidentId),
                 "Later correlated failures keep the incident under investigation");
@@ -214,7 +220,14 @@ public final class IncidentDiagnosisChecks {
         private IncidentDetails details;
         public void presentProcessed(Incident result) { incident = result; }
         public void presentDetails(IncidentDetails result) { details = result; }
-        public void presentError(String message) { throw new AssertionError(message); }
+        private boolean expectError;
+        private String error;
+        public void presentError(String message) {
+            if (!expectError) {
+                throw new AssertionError(message);
+            }
+            error = message;
+        }
     }
 
     private static FailureEvent failure(UUID service, long second) {

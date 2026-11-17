@@ -4,7 +4,12 @@ import java.util.UUID;
 
 /** Invoke off the Swing EDT. Calls are synchronous and must be serialized by the caller. */
 public interface IncidentInputBoundary {
-    void processFailure(FailureInput input);
+    /**
+     * Correlates, diagnoses and saves the failure, then notifies the output boundary.
+     * Returns RETRYABLE on storage access failures; redelivering the same event ID is safe
+     * because a stored event ID reuses its incident.
+     */
+    FailureProcessingResult processFailure(FailureInput input);
 
     /**
      * Moves an OPEN incident to INVESTIGATING and saves it before presenting details.

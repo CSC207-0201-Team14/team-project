@@ -39,13 +39,13 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     }
 
     @Override
-    public void processFailure(FailureInput input) {
+    public FailureProcessingResult processFailure(FailureInput input) {
         Incident result;
         try {
             Optional<ConfigurationSnapshot> configuration = configurations.findBySystemId(input.getSystemId());
             if (configuration.isEmpty()) {
                 output.presentError("Monitored system was not found");
-                return;
+                return FailureProcessingResult.REJECTED;
             }
             Set<UUID> serviceIds = configuration.get().getSystem().getServices().stream()
                     .map(service -> service.getId()).collect(Collectors.toSet());
@@ -53,16 +53,22 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                     || input.getRecentObservations().stream().anyMatch(resultItem ->
                     !serviceIds.contains(resultItem.getServiceId()))) {
                 output.presentError("Failure input references a service outside the monitored system");
-                return;
+                return FailureProcessingResult.REJECTED;
             }
             List<Incident> unresolved = incidents.findUnresolvedBySystemId(input.getSystemId());
-            result = assessment.assess(input, configuration.get(), List.copyOf(unresolved));
+            try {
+                result = assessment.assess(input, configuration.get(), List.copyOf(unresolved));
+            } catch (IllegalArgumentException exception) {
+                output.presentError("Failure input could not be assessed: " + exception.getMessage());
+                return FailureProcessingResult.REJECTED;
+            }
             incidents.save(result);
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
-            return;
+            return FailureProcessingResult.RETRYABLE;
         }
         output.presentProcessed(result);
+        return FailureProcessingResult.PROCESSED;
     }
 
     @Override
