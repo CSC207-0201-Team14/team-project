@@ -1,4 +1,4 @@
-package use_case.investigate_incident;
+package use_case.shared;
 
 /** Expected adapter access failures, with a message suitable for presentation. */
 public final class IncidentDataException extends RuntimeException {

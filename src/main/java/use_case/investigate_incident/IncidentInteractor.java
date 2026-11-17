@@ -12,6 +12,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import use_case.shared.IncidentDataException;
+import use_case.shared.IncidentRepository;
 
 /** Coordinates ports; diagnosis and correlation are supplied through IncidentAssessment. */
 public final class IncidentInteractor implements IncidentInputBoundary {

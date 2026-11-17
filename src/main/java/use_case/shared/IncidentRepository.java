@@ -1,10 +1,14 @@
-package use_case.investigate_incident;
+package use_case.shared;
 
 import entity.Incident;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Incident storage shared by the investigate-incident (UC3) and recover-service (UC4) use cases.
+ * Saves replace the whole incident, so callers serialize incident reads and writes on one thread.
+ */
 public interface IncidentRepository {
     Optional<Incident> findById(UUID incidentId);
 

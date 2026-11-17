@@ -13,6 +13,8 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import use_case.shared.IncidentDataException;
+import use_case.shared.IncidentRepository;
 
 /** Dependency-free checks, following entity.DomainChecks. */
 public final class IncidentContractChecks {

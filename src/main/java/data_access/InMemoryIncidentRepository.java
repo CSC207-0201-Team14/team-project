@@ -1,7 +1,7 @@
 package data_access;
 
 import entity.Incident;
-import use_case.investigate_incident.IncidentRepository;
+import use_case.shared.IncidentRepository;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
