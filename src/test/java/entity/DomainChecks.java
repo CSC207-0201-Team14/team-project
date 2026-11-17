@@ -73,7 +73,7 @@ public final class DomainChecks {
                 "Reassessment preserves the previous finding");
 
         RecoveryAction action = new RecoveryAction(UUID.randomUUID(), reassessed.getId(), service,
-                RecoveryAction.ActionType.START_DOCKER_CONTAINER, "Start the container");
+                RecoveryAction.ActionType.RECOVER_DOCKER_CONTAINER, "Recover the container");
         check(action.requiresConfirmation(), "Executable actions require confirmation");
         RecoveryAttempt attempt = new RecoveryAttempt(UUID.randomUUID(), action.getId(), START.plusSeconds(1),
                 verificationStart, RecoveryAttempt.Outcome.SUCCEEDED, "");
