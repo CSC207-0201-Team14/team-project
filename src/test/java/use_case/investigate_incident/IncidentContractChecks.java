@@ -45,6 +45,11 @@ public final class IncidentContractChecks {
                 "Details combine retained failure evidence with historical observation lookup");
         check(details.getMissingObservationIds().isEmpty(), "All evidence is available");
         check(details.getIncident().getStatus() == Incident.Status.OPEN, "Opening details preserves status");
+        check(details.getRecommendedActions().size() == 1
+                && details.getRecommendedActions().get(0).getTargetServiceId().equals(fixture.serviceId)
+                && details.getRecommendedActions().get(0).getActionType()
+                == RecoveryAction.ActionType.RECOVER_DOCKER_CONTAINER,
+                "Details include the container recommendation for the failing Docker service");
         check(details.getIncident().getActiveFindings().isEmpty()
                 && details.getIncident().getFindingHistory().size() == 1, "Historical findings remain inspectable");
 
@@ -78,7 +83,7 @@ public final class IncidentContractChecks {
         };
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
                 ids -> Map.of(), failingRepository, (input, configuration, unresolved) -> fixture.assessed,
-                fixture.output);
+                new RecoveryRecommendationProvider(), fixture.output);
         boundary.processFailure(fixture.input());
         check(fixture.output.error.equals("Save failed") && fixture.output.processed == null,
                 "Save failure is reported without publishing success");
@@ -143,7 +148,7 @@ public final class IncidentContractChecks {
                 seenConfiguration = snapshot;
                 seenUnresolved = unresolved;
                 return assessed; // Fixed test output; diagnosis/correlation arrive in later stages.
-            }, output);
+            }, new RecoveryRecommendationProvider(), output);
         }
 
         private FailureInput input() { return new FailureInput(system.getId(), failure, List.of(failed)); }

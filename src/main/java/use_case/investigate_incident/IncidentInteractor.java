@@ -2,6 +2,7 @@ package use_case.investigate_incident;
 
 import entity.HealthCheckResult;
 import entity.Incident;
+import entity.RecoveryAction;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -17,15 +18,17 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     private final ObservationReader observations;
     private final IncidentRepository incidents;
     private final IncidentAssessment assessment;
+    private final RecoveryRecommendationProvider recommendations;
     private final IncidentOutputBoundary output;
 
     public IncidentInteractor(ConfigurationReader configurations, ObservationReader observations,
                               IncidentRepository incidents, IncidentAssessment assessment,
-                              IncidentOutputBoundary output) {
+                              RecoveryRecommendationProvider recommendations, IncidentOutputBoundary output) {
         this.configurations = configurations;
         this.observations = observations;
         this.incidents = incidents;
         this.assessment = assessment;
+        this.recommendations = recommendations;
         this.output = output;
     }
 
@@ -81,7 +84,10 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                 evidence.putAll(observations.findByIds(Set.copyOf(missing)));
             }
             missing.removeAll(evidence.keySet());
-            details = new IncidentDetails(incident, evidence, missing);
+            List<RecoveryAction> recommended = configurations.findBySystemId(incident.getSystemId())
+                    .map(configuration -> recommendations.recommend(incident, configuration))
+                    .orElse(List.of());
+            details = new IncidentDetails(incident, evidence, missing, recommended);
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
             return;
