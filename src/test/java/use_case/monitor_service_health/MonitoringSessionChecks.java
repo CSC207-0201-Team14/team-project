@@ -54,6 +54,10 @@ public final class MonitoringSessionChecks {
             public void presentError(String message) {
                 errors.add(message);
             }
+
+            @Override
+            public void presentHealth(entity.ServiceHealth health) {
+            }
         };
 
         MonitoringSessionInteractor session =

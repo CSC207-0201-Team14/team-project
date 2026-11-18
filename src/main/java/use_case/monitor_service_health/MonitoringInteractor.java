@@ -5,11 +5,14 @@ import entity.Service;
 
 import java.util.Objects;
 
+import java.util.List;
+
 public final class MonitoringInteractor implements MonitoringInputBoundary {
 
     private final HealthChecker checker;
     private final ObservationStore store;
     private final MonitoringOutputBoundary output;
+    private final HealthStateEvaluator evaluator = new HealthStateEvaluator();
 
     public MonitoringInteractor(
             HealthChecker checker,
@@ -37,5 +40,19 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
         }
 
         output.presentCheckResult(result);
+
+        List<HealthCheckResult> history;
+
+        try {
+            history = store.findByServiceId(service.getId());
+        } catch (ObservationStoreException exception) {
+            output.presentError(
+                    "Could not read health check history: " + exception.getMessage()
+            );
+            return;
+        }
+
+        HealthEvaluation evaluation = evaluator.evaluate(service, history);
+        output.presentHealth(evaluation.getHealth());
     }
 }

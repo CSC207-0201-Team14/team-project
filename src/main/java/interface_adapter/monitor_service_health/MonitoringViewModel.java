@@ -8,6 +8,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import entity.HealthStatus;
+import entity.ServiceHealth;
+
 /** Holds monitoring display state. Access this model on the Swing EDT. */
 public final class MonitoringViewModel {
 
@@ -16,6 +19,7 @@ public final class MonitoringViewModel {
 
     private final List<HealthCheckResult> results = new ArrayList<>();
     private String errorMessage = "";
+    private HealthStatus healthStatus = HealthStatus.UNKNOWN;
 
     public List<HealthCheckResult> getResults() {
         return List.copyOf(results);
@@ -54,5 +58,22 @@ public final class MonitoringViewModel {
 
     public void addPropertyChangeListener(PropertyChangeListener listener) {
         changes.addPropertyChangeListener(listener);
+    }
+
+    public HealthStatus getHealthStatus() {
+        return healthStatus;
+    }
+
+    public void showHealth(ServiceHealth health) {
+        Objects.requireNonNull(health, "health");
+
+        HealthStatus previousStatus = healthStatus;
+        healthStatus = health.getStatus();
+
+        changes.firePropertyChange(
+                "healthStatus",
+                previousStatus,
+                healthStatus
+        );
     }
 }

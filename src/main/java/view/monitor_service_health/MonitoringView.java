@@ -21,6 +21,7 @@ public final class MonitoringView extends JPanel {
 
     private final MonitoringViewModel viewModel;
     private final JLabel errorLabel = new JLabel(" ");
+    private final JLabel healthLabel = new JLabel("Health: UNKNOWN");
 
     private final DefaultTableModel tableModel = new DefaultTableModel(
             new String[]{"Time (UTC)", "Result", "Response (ms)", "Message"},
@@ -80,6 +81,7 @@ public final class MonitoringView extends JPanel {
         controls.add(startButton);
         controls.add(stopButton);
         controls.add(statusLabel);
+        controls.add(healthLabel);
 
         JTable table = new JTable(tableModel);
         table.setFillsViewportHeight(true);
@@ -93,6 +95,9 @@ public final class MonitoringView extends JPanel {
     }
 
     private void refresh() {
+        healthLabel.setText(
+                "Health: " + viewModel.getHealthStatus().name()
+        );
         tableModel.setRowCount(0);
 
         for (HealthCheckResult result : viewModel.getResults()) {

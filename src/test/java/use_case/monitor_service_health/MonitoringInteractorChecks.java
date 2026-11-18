@@ -16,6 +16,9 @@ import java.util.UUID;
 import java.io.IOException;
 import java.util.ArrayList;
 
+import entity.ServiceHealth;
+import entity.HealthStatus;
+
 public final class MonitoringInteractorChecks {
 
     public static void main(String[] args) {
@@ -49,6 +52,8 @@ public final class MonitoringInteractorChecks {
 
         InMemoryObservationStore store = new InMemoryObservationStore();
 
+        List<ServiceHealth> healthUpdates = new ArrayList<>();
+
         MonitoringOutputBoundary output = new MonitoringOutputBoundary() {
             @Override
             public void presentCheckResult(HealthCheckResult result) {
@@ -64,6 +69,11 @@ public final class MonitoringInteractorChecks {
             public void presentError(String message) {
                 throw new AssertionError("Unexpected error: " + message);
             }
+
+            @Override
+            public void presentHealth(ServiceHealth health) {
+                healthUpdates.add(health);
+            }
         };
 
         MonitoringInteractor interactor = new MonitoringInteractor(
@@ -71,6 +81,17 @@ public final class MonitoringInteractorChecks {
         );
 
         interactor.checkOnce(service);
+
+        require(healthUpdates.size() == 1,
+                "One check should produce one health update");
+
+        ServiceHealth health = healthUpdates.get(0);
+
+        require(health.getStatus() == HealthStatus.UNKNOWN,
+                "One pass should remain UNKNOWN when recovery requires two passes");
+
+        require(health.getLatestResult().orElseThrow() == expected,
+                "The health update should reference the latest check");
 
         require(store.findByServiceId(service.getId()).equals(List.of(expected)),
                 "The observation should remain available in history");
@@ -114,6 +135,13 @@ public final class MonitoringInteractorChecks {
             @Override
             public void presentError(String message) {
                 errors.add(message);
+            }
+
+            @Override
+            public void presentHealth(ServiceHealth health) {
+                throw new AssertionError(
+                        "A storage failure should prevent health evaluation"
+                );
             }
         };
 
