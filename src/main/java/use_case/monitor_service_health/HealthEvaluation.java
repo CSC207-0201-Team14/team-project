@@ -9,16 +9,15 @@ import java.util.Optional;
 public final class HealthEvaluation {
 
     private final ServiceHealth health;
-    private final Optional<FailureEvent> failureEvent;
+    private final FailureEvent failureEvent;
 
+    /** failureEvent may be null when no new failure occurred. */
     public HealthEvaluation(
             ServiceHealth health,
-            Optional<FailureEvent> failureEvent
+            FailureEvent failureEvent
     ) {
         this.health = Objects.requireNonNull(health, "health");
-        this.failureEvent = Objects.requireNonNull(
-                failureEvent, "failureEvent"
-        );
+        this.failureEvent = failureEvent;
     }
 
     public ServiceHealth getHealth() {
@@ -26,6 +25,6 @@ public final class HealthEvaluation {
     }
 
     public Optional<FailureEvent> getFailureEvent() {
-        return failureEvent;
+        return Optional.ofNullable(failureEvent);
     }
 }

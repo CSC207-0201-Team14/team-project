@@ -12,7 +12,6 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -48,7 +47,7 @@ public final class HealthStateEvaluator {
         if (observations.isEmpty()) {
             return new HealthEvaluation(
                     ServiceHealth.unobserved(service.getId()),
-                    Optional.empty()
+                    null
             );
         }
 
@@ -106,7 +105,7 @@ public final class HealthStateEvaluator {
 
         return new HealthEvaluation(
                 ServiceHealth.evaluated(status, latest),
-                Optional.ofNullable(latestFailure)
+                latestFailure
         );
     }
 }
