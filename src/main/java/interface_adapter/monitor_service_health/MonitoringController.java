@@ -24,7 +24,7 @@ public final class MonitoringController {
     public void checkOnce(Service service) {
         Objects.requireNonNull(service, "service");
 
-        SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
+        SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() {
                 input.checkOnce(service);
