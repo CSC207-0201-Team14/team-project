@@ -22,7 +22,7 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
     }
 
     @Override
-    public void checkOnce(Service service) {
+    public synchronized void checkOnce(Service service) {
         Objects.requireNonNull(service, "service");
 
         HealthCheckResult result = checker.check(service);

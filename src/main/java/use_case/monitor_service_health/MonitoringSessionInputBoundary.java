@@ -14,4 +14,6 @@ public interface MonitoringSessionInputBoundary {
 
     /** Cancels future checks for all monitored services. */
     void stopAll();
+
+    boolean isMonitoring(UUID serviceId);
 }

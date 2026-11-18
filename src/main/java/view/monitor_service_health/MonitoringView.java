@@ -44,11 +44,42 @@ public final class MonitoringView extends JPanel {
         setLayout(new BorderLayout(8, 8));
 
         JButton checkButton = new JButton("Check once");
-        checkButton.addActionListener(event -> controller.checkOnce(service));
+        JButton startButton = new JButton("Start");
+        JButton stopButton = new JButton("Stop");
+        JLabel statusLabel = new JLabel("Stopped");
+
+        stopButton.setEnabled(false);
+
+        checkButton.addActionListener(
+                event -> controller.checkOnce(service)
+        );
+
+        startButton.addActionListener(event -> {
+            boolean started = controller.startMonitoring(service);
+
+            if (started) {
+                startButton.setEnabled(false);
+                stopButton.setEnabled(true);
+                checkButton.setEnabled(false);
+                statusLabel.setText("Monitoring");
+            }
+        });
+
+        stopButton.addActionListener(event -> {
+            controller.stopMonitoring(service.getId());
+
+            startButton.setEnabled(true);
+            stopButton.setEnabled(false);
+            checkButton.setEnabled(true);
+            statusLabel.setText("Stopped");
+        });
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
         controls.add(new JLabel("Service: " + service.getName()));
         controls.add(checkButton);
+        controls.add(startButton);
+        controls.add(stopButton);
+        controls.add(statusLabel);
 
         JTable table = new JTable(tableModel);
         table.setFillsViewportHeight(true);

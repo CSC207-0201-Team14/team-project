@@ -75,6 +75,12 @@ public final class MonitoringSessionInteractor
         sessions.clear();
     }
 
+    @Override
+    public synchronized boolean isMonitoring(UUID serviceId) {
+        Objects.requireNonNull(serviceId, "serviceId");
+        return sessions.containsKey(serviceId);
+    }
+
     private void checkSafely(Service service, AtomicBoolean active) {
         if (!active.get()) {
             return;

@@ -22,6 +22,9 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.UUID;
 
+import infrastructure.scheduling.ExecutorMonitoringScheduler;
+import use_case.monitor_service_health.MonitoringSessionInteractor;
+
 public final class MonitoringDemo {
 
     public static void main(String[] args) throws IOException {
@@ -49,7 +52,7 @@ public final class MonitoringDemo {
                         URI.create("http://127.0.0.1:" + port + "/health")
                 ),
                 new MonitoringPolicy(
-                        Duration.ofSeconds(10),
+                        Duration.ofSeconds(3),
                         Duration.ofSeconds(2),
                         3,
                         2
@@ -69,8 +72,19 @@ public final class MonitoringDemo {
                 presenter
         );
 
+        ExecutorMonitoringScheduler scheduler =
+                new ExecutorMonitoringScheduler();
+
+        MonitoringSessionInteractor sessions =
+                new MonitoringSessionInteractor(
+                        interactor,
+                        scheduler,
+                        presenter
+                );
+
         MonitoringController controller = new MonitoringController(
                 interactor,
+                sessions,
                 presenter
         );
 
@@ -89,6 +103,8 @@ public final class MonitoringDemo {
         frame.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent event) {
+                controller.stopAll();
+                scheduler.close();
                 server.stop(0);
             }
         });
