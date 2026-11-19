@@ -2,7 +2,10 @@ package use_case.investigate_incident;
 
 import java.util.UUID;
 
-/** Invoke off the Swing EDT. Calls are synchronous and must be serialized by the caller. */
+/**
+ * Invoke off the Swing EDT. Calls are synchronous and must be serialized by the caller;
+ * wrap the interactor in SerializedIncidentInputBoundary when several threads share it.
+ */
 public interface IncidentInputBoundary {
     /**
      * Correlates, diagnoses and saves the failure, then notifies the output boundary.
