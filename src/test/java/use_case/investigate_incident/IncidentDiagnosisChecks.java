@@ -147,8 +147,13 @@ public final class IncidentDiagnosisChecks {
                 "Missing graph cannot support cross-service grouping");
         FailureInput errorThenFailure = new FailureInput(fixture.systemId, failure(fixture.db, 90),
                 List.of(result(fixture.db, 80, HealthCheckResult.Outcome.MONITORING_ERROR)));
-        check(!assessment.assess(errorThenFailure, fixture.configuration, List.of(db)).getId().equals(db.getId()),
-                "Monitoring error interrupts evidence of continuous failure");
+        Incident afterError = assessment.assess(errorThenFailure, fixture.configuration, List.of(db));
+        check(afterError.getId().equals(db.getId()) && afterError.getFailures().size() == 2,
+                "FAIL, MONITORING_ERROR, FAIL remains one incident");
+        FailureInput errorIsLatest = new FailureInput(fixture.systemId, apiFailure,
+                List.of(result(fixture.db, 90, HealthCheckResult.Outcome.MONITORING_ERROR)));
+        check(!assessment.assess(errorIsLatest, fixture.configuration, List.of(db)).getId().equals(db.getId()),
+                "A dependency whose latest health is unknown cannot support grouping");
     }
 
     private static void verifiesInteractorWithRealStrategies() {

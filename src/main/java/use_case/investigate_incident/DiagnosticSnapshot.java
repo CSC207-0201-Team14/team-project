@@ -58,7 +58,10 @@ public final class DiagnosticSnapshot {
         return Optional.of(latest);
     }
 
-    /** A passing check or monitoring error interrupts evidence of continuous failure. */
+    /**
+     * Only a passing check interrupts evidence of continuous failure. A monitoring error is unknown health,
+     * so it neither confirms nor ends the failure; the latest result must still be a failure.
+     */
     public boolean isContinuingFailure(FailureEvent failure) {
         if (failure.getTimestamp().isBefore(earliestEvidence)
                 || currentFailure(failure.getServiceId()).isEmpty()) {
@@ -67,7 +70,7 @@ public final class DiagnosticSnapshot {
         return observations.stream().noneMatch(result -> result.getServiceId().equals(failure.getServiceId())
                 && !result.getTimestamp().isBefore(failure.getTimestamp())
                 && !result.getTimestamp().isAfter(assessedAt)
-                && result.getOutcome() != HealthCheckResult.Outcome.FAIL);
+                && result.getOutcome() == HealthCheckResult.Outcome.PASS);
     }
 
     public ConfigurationSnapshot getConfiguration() { return configuration; }
