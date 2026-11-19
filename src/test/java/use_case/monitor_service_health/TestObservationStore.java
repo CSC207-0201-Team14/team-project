@@ -1,7 +1,6 @@
-package data_access.persistence;
+package use_case.monitor_service_health;
 
 import entity.HealthCheckResult;
-import use_case.monitor_service_health.ObservationStore;
 
 import java.util.Comparator;
 import java.util.HashMap;
@@ -11,11 +10,9 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import use_case.monitor_service_health.ObservationLookup;
-import java.util.Set;
+/** Test double used by monitoring use-case checks. */
+final class TestObservationStore implements ObservationStore {
 
-public final class InMemoryObservationStore
-        implements ObservationStore, ObservationLookup {
     private final Map<UUID, HealthCheckResult> observations = new HashMap<>();
 
     @Override
@@ -33,25 +30,5 @@ public final class InMemoryObservationStore
                 .sorted(Comparator.comparing(HealthCheckResult::getTimestamp)
                         .thenComparing(HealthCheckResult::getId))
                 .collect(Collectors.toList());
-    }
-    @Override
-    public synchronized Map<UUID, HealthCheckResult> findByIds(
-            Set<UUID> allowedServiceIds,
-            Set<UUID> observationIds
-    ) {
-        Set<UUID> services = Set.copyOf(allowedServiceIds);
-        Set<UUID> requestedIds = Set.copyOf(observationIds);
-
-        Map<UUID, HealthCheckResult> found = new HashMap<>();
-
-        for (UUID observationId : requestedIds) {
-            HealthCheckResult result = observations.get(observationId);
-
-            if (result != null && services.contains(result.getServiceId())) {
-                found.put(observationId, result);
-            }
-        }
-
-        return Map.copyOf(found);
     }
 }

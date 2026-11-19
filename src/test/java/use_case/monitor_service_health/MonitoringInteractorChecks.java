@@ -1,6 +1,5 @@
 package use_case.monitor_service_health;
 
-import data_access.persistence.InMemoryObservationStore;
 import entity.HealthCheckResult;
 import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
@@ -50,7 +49,7 @@ public final class MonitoringInteractorChecks {
             return expected;
         };
 
-        InMemoryObservationStore store = new InMemoryObservationStore();
+        TestObservationStore store = new TestObservationStore();
 
         List<ServiceHealth> healthUpdates = new ArrayList<>();
 

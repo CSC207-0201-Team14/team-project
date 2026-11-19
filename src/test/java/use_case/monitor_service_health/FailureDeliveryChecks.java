@@ -1,6 +1,5 @@
 package use_case.monitor_service_health;
 
-import data_access.persistence.InMemoryObservationStore;
 import entity.FailureEvent;
 import entity.HealthCheckResult;
 import entity.MonitoringPolicy;
@@ -54,7 +53,7 @@ public final class FailureDeliveryChecks {
                 "Test failure"
         );
 
-        InMemoryObservationStore store = new InMemoryObservationStore();
+        TestObservationStore store = new TestObservationStore();
         List<FailureEvent> deliveries = new ArrayList<>();
         List<String> errors = new ArrayList<>();
 
