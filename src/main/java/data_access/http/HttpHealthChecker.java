@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Instant;
+import java.time.Clock;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.UUID;
@@ -18,6 +18,12 @@ import java.util.concurrent.TimeUnit;
 public final class HttpHealthChecker implements HealthChecker {
 
     private final HttpClient client = HttpClient.newHttpClient();
+
+    private final Clock clock;
+
+    public HttpHealthChecker(Clock clock) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
 
     @Override
     public HealthCheckResult check(Service service) {
@@ -58,7 +64,7 @@ public final class HttpHealthChecker implements HealthChecker {
             return new HealthCheckResult(
                     UUID.randomUUID(),
                     service.getId(),
-                    Instant.now(),
+                    clock.instant(),
                     outcome,
                     OptionalLong.of(elapsedMs),
                     "HTTP " + statusCode
@@ -78,7 +84,7 @@ public final class HttpHealthChecker implements HealthChecker {
         return new HealthCheckResult(
                 UUID.randomUUID(),
                 service.getId(),
-                Instant.now(),
+                clock.instant(),
                 HealthCheckResult.Outcome.MONITORING_ERROR,
                 OptionalLong.empty(),
                 message

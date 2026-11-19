@@ -25,6 +25,8 @@ import java.util.UUID;
 import infrastructure.scheduling.ExecutorMonitoringScheduler;
 import use_case.monitor_service_health.MonitoringSessionInteractor;
 
+import java.time.Clock;
+
 public final class MonitoringDemo {
 
     public static void main(String[] args) throws IOException {
@@ -63,13 +65,16 @@ public final class MonitoringDemo {
     }
 
     private static void showWindow(Service service, HttpServer server) {
+        Clock clock = Clock.systemUTC();
+
         MonitoringViewModel viewModel = new MonitoringViewModel();
         MonitoringPresenter presenter = new MonitoringPresenter(viewModel);
 
         MonitoringInteractor interactor = new MonitoringInteractor(
-                new HttpHealthChecker(),
+                new HttpHealthChecker(clock),
                 new InMemoryObservationStore(),
-                presenter
+                presenter,
+                event -> true
         );
 
         ExecutorMonitoringScheduler scheduler =

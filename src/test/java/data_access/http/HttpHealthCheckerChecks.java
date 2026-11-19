@@ -11,6 +11,10 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.UUID;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 public final class HttpHealthCheckerChecks {
 
     public static void main(String[] args) throws Exception {
@@ -49,7 +53,10 @@ public final class HttpHealthCheckerChecks {
 
         try {
             int port = server.getAddress().getPort();
-            HttpHealthChecker checker = new HttpHealthChecker();
+            Instant fixedTime = Instant.parse("2026-11-19T12:00:00Z");
+            Clock clock = Clock.fixed(fixedTime, ZoneOffset.UTC);
+
+            HttpHealthChecker checker = new HttpHealthChecker(clock);
 
             Service healthy = service(port, "/healthy");
             HealthCheckResult passed = checker.check(healthy);
@@ -72,6 +79,15 @@ public final class HttpHealthCheckerChecks {
             require(timedOut.getOutcome()
                             == HealthCheckResult.Outcome.MONITORING_ERROR,
                     "A timeout should produce MONITORING_ERROR");
+
+            require(passed.getTimestamp().equals(fixedTime),
+                    "A passing check should use the injected clock");
+
+            require(failed.getTimestamp().equals(fixedTime),
+                    "A failed check should use the injected clock");
+
+            require(timedOut.getTimestamp().equals(fixedTime),
+                    "A monitoring error should use the injected clock");
 
             System.out.println("HttpHealthCheckerChecks passed");
         } finally {

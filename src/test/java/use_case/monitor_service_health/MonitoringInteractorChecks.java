@@ -77,7 +77,7 @@ public final class MonitoringInteractorChecks {
         };
 
         MonitoringInteractor interactor = new MonitoringInteractor(
-                checker, store, output
+                checker, store, output, event -> true
         );
 
         interactor.checkOnce(service);
@@ -148,7 +148,7 @@ public final class MonitoringInteractorChecks {
         MonitoringInteractor interactor = new MonitoringInteractor(
                 requestedService -> expected,
                 failingStore,
-                output
+                output, event -> true
         );
 
         interactor.checkOnce(service);
