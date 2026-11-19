@@ -21,7 +21,12 @@ public final class RecoveryAction {
         }
     }
 
-    public enum ActionType { START_DOCKER_CONTAINER }
+    /**
+     * RECOVER_DOCKER_CONTAINER names the container to recover, not the Docker operation.
+     * The recovery use case inspects live container state at execution time and chooses
+     * start, unpause or restart.
+     */
+    public enum ActionType { RECOVER_DOCKER_CONTAINER }
 
     public boolean requiresConfirmation() {
         return true;

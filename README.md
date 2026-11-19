@@ -113,11 +113,11 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 **Main success scenario:**
 
-1. Sentinel displays the incident's status, suspected cause, observed failing services, and potentially affected services.
+1. Sentinel marks an open incident as investigating and displays its status, suspected cause, observed failing services, and potentially affected services.
 2. The developer selects supporting evidence.
 3. Sentinel displays the relevant health check results and dependency relationships supporting its diagnosis.
 4. The developer inspects how the failure may affect dependent services.
-5. Sentinel presents recommended troubleshooting steps or supported recovery actions.
+5. Sentinel presents troubleshooting steps from its findings and, when the most upstream failing service is a Docker container, recommends recovering that container.
 6. The developer reviews the recommendations to determine the next action.
 
 **Extensions:**
@@ -134,15 +134,15 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 **Primary actor:** Developer.
 
-**Preconditions:** An unresolved incident exists, a recovery recommendation is available, and monitoring is active to verify recovery.
+**Preconditions:** An unresolved incident with findings from Use Case 3 exists, a recovery recommendation is available, and monitoring is active to verify recovery.
 
 **Trigger:** The developer selects a recovery recommendation for the incident.
 
 **Main success scenario:**
 
-1. Sentinel displays the proposed recovery action and target service.
-2. The developer confirms a supported action, such as starting a stopped Docker container.
-3. Sentinel executes the action and records the attempt's outcome.
+1. Sentinel displays the recommended target container and how its current state determines the operation.
+2. The developer confirms recovery of the container.
+3. Sentinel inspects the container state, executes the matching operation (start a stopped container, unpause a paused container, or restart a running but failing container), and records the attempt's outcome.
 4. Sentinel checks the target service and affected dependent services again.
 5. Sentinel confirms that the configured recovery criteria are satisfied.
 6. Sentinel marks the incident as resolved and retains it in the incident history.
@@ -150,9 +150,10 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 **Extensions:**
 
-- **1a. Execution is unsupported:** Sentinel provides manual recovery instructions. After the developer performs the action externally, monitoring continues verification at step 4.
+- **1a. Execution is unsupported:** Sentinel shows the manual next steps from the incident's findings. After the developer performs the action externally, monitoring continues verification at step 4.
 - **2a. Developer cancels:** Sentinel performs no recovery action, and the incident remains unresolved.
 - **3a. Action fails or permission is denied:** Sentinel records and displays the failure. The incident remains unresolved, and the developer may retry or follow manual instructions.
+- **3b. Container state is unsuitable for automatic recovery:** If the container is restarting, was killed for exceeding memory, or is missing, Sentinel performs no operation and shows the manual next steps. The incident remains unresolved.
 - **4a. Recovery cannot be verified:** Sentinel reports the monitoring error and keeps the incident unresolved until verification succeeds.
 - **5a. Recovery criteria are not satisfied:** Sentinel keeps the incident unresolved, displays the remaining failures, and continues monitoring.
 
