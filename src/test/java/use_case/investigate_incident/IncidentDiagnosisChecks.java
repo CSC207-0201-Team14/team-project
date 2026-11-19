@@ -161,7 +161,7 @@ public final class IncidentDiagnosisChecks {
         InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
         CapturingOutput output = new CapturingOutput();
         IncidentInputBoundary boundary = new IncidentInteractor(id -> java.util.Optional.of(fixture.configuration),
-                ids -> java.util.Map.of(), repository, fixture.assessment(),
+                (services, ids) -> java.util.Map.of(), repository, fixture.assessment(),
                 new RecoveryRecommendationProvider(), CLOCK, output);
         FailureInput db = fixture.input(failure(fixture.db, 70));
         boundary.processFailure(db);

@@ -98,7 +98,7 @@ public final class IncidentInteractor implements IncidentInputBoundary {
             Set<UUID> missing = new HashSet<>(required);
             missing.removeAll(evidence.keySet());
             if (!missing.isEmpty()) {
-                evidence.putAll(observations.findByIds(Set.copyOf(missing)));
+                evidence.putAll(observations.findByIds(relatedServices(incident), Set.copyOf(missing)));
             }
             missing.removeAll(evidence.keySet());
             List<RecoveryAction> recommended = configurations.findBySystemId(incident.getSystemId())
@@ -110,5 +110,21 @@ public final class IncidentInteractor implements IncidentInputBoundary {
             return;
         }
         output.presentDetails(details);
+    }
+
+    /** Services whose observations the incident can cite: failures, findings, their edges and resolution. */
+    private static Set<UUID> relatedServices(Incident incident) {
+        Set<UUID> services = new HashSet<>();
+        incident.getFailures().forEach(failure -> services.add(failure.getServiceId()));
+        incident.getFindingHistory().forEach(finding -> {
+            services.add(finding.getAffectedServiceId());
+            finding.getSuspectedCauseServiceId().ifPresent(services::add);
+            finding.getDependencyEvidence().forEach(edge -> {
+                services.add(edge.getDependentServiceId());
+                services.add(edge.getRequiredServiceId());
+            });
+        });
+        incident.getResolutionEvidence().forEach(result -> services.add(result.getServiceId()));
+        return Set.copyOf(services);
     }
 }

@@ -7,9 +7,10 @@ import java.util.UUID;
 
 public interface ObservationReader {
     /**
-     * Returns retained observations keyed by their IDs. Missing IDs are omitted.
+     * Returns retained observations keyed by their IDs, searching only the given services.
+     * Missing IDs, and observations of other services, are omitted.
      * Includes historical evidence, independently of the recent observation window.
      * Access failures throw IncidentDataException.
      */
-    Map<UUID, HealthCheckResult> findByIds(Set<UUID> observationIds);
+    Map<UUID, HealthCheckResult> findByIds(Set<UUID> serviceIds, Set<UUID> observationIds);
 }

@@ -50,6 +50,8 @@ public final class IncidentContractChecks {
         check(details.getObservations().keySet().equals(Set.of(fixture.failed.getId(), fixture.passed.getId())),
                 "Details combine retained failure evidence with historical observation lookup");
         check(details.getMissingObservationIds().isEmpty(), "All evidence is available");
+        check(fixture.seenServiceIds.equals(Set.of(fixture.serviceId)),
+                "Historical lookup is scoped to the services the incident cites");
         check(details.getIncident().getStatus() == Incident.Status.INVESTIGATING
                 && details.getIncident().getInvestigatingAt().orElseThrow().equals(CLOCK.instant()),
                 "Opening an open incident starts investigation at the current time");
@@ -97,7 +99,7 @@ public final class IncidentContractChecks {
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
-                ids -> Map.of(), failingRepository, (input, configuration, unresolved) -> fixture.assessed,
+                (services, ids) -> Map.of(), failingRepository, (input, configuration, unresolved) -> fixture.assessed,
                 new RecoveryRecommendationProvider(), CLOCK, fixture.output);
         check(boundary.processFailure(fixture.input()) == FailureProcessingResult.RETRYABLE,
                 "A storage failure is retryable");
@@ -106,7 +108,7 @@ public final class IncidentContractChecks {
 
         InMemoryIncidentRepository untouched = new InMemoryIncidentRepository();
         IncidentInputBoundary invalid = new IncidentInteractor(id -> Optional.of(fixture.configuration),
-                ids -> Map.of(), untouched, (input, configuration, unresolved) -> {
+                (services, ids) -> Map.of(), untouched, (input, configuration, unresolved) -> {
                     throw new IllegalArgumentException("failure is in the future");
                 }, new RecoveryRecommendationProvider(), CLOCK, fixture.output);
         check(invalid.processFailure(fixture.input()) == FailureProcessingResult.REJECTED
@@ -122,7 +124,7 @@ public final class IncidentContractChecks {
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         fixture.output.error = null;
-        new IncidentInteractor(id -> Optional.of(fixture.configuration), ids -> Map.of(), unsavable,
+        new IncidentInteractor(id -> Optional.of(fixture.configuration), (services, ids) -> Map.of(), unsavable,
                 (input, configuration, unresolved) -> fixture.assessed, new RecoveryRecommendationProvider(),
                 CLOCK, fixture.output).openIncident(fixture.assessed.getId());
         check("Save failed".equals(fixture.output.error) && fixture.output.details == null,
@@ -160,6 +162,7 @@ public final class IncidentContractChecks {
         private ConfigurationSnapshot configuration;
         private ConfigurationSnapshot seenConfiguration;
         private List<Incident> seenUnresolved;
+        private Set<UUID> seenServiceIds;
         private final IncidentInputBoundary boundary;
 
         private Fixture() {
@@ -174,10 +177,11 @@ public final class IncidentContractChecks {
             assessed = Incident.open(UUID.randomUUID(), systemId, TIME, failure)
                     .updateAssessment(Set.of(), List.of(history)).updateAssessment(Set.of(), List.of());
             retained.put(passed.getId(), passed);
-            boundary = new IncidentInteractor(id -> Optional.ofNullable(configuration), ids -> {
+            boundary = new IncidentInteractor(id -> Optional.ofNullable(configuration), (services, ids) -> {
+                seenServiceIds = services;
                 Map<UUID, HealthCheckResult> found = new HashMap<>();
                 for (UUID id : ids) {
-                    if (retained.containsKey(id)) {
+                    if (retained.containsKey(id) && services.contains(retained.get(id).getServiceId())) {
                         found.put(id, retained.get(id));
                     }
                 }
