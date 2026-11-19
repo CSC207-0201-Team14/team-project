@@ -11,8 +11,11 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-public final class InMemoryObservationStore implements ObservationStore {
+import use_case.monitor_service_health.ObservationLookup;
+import java.util.Set;
 
+public final class InMemoryObservationStore
+        implements ObservationStore, ObservationLookup {
     private final Map<UUID, HealthCheckResult> observations = new HashMap<>();
 
     @Override
@@ -30,5 +33,25 @@ public final class InMemoryObservationStore implements ObservationStore {
                 .sorted(Comparator.comparing(HealthCheckResult::getTimestamp)
                         .thenComparing(HealthCheckResult::getId))
                 .collect(Collectors.toList());
+    }
+    @Override
+    public synchronized Map<UUID, HealthCheckResult> findByIds(
+            Set<UUID> allowedServiceIds,
+            Set<UUID> observationIds
+    ) {
+        Set<UUID> services = Set.copyOf(allowedServiceIds);
+        Set<UUID> requestedIds = Set.copyOf(observationIds);
+
+        Map<UUID, HealthCheckResult> found = new HashMap<>();
+
+        for (UUID observationId : requestedIds) {
+            HealthCheckResult result = observations.get(observationId);
+
+            if (result != null && services.contains(result.getServiceId())) {
+                found.put(observationId, result);
+            }
+        }
+
+        return Map.copyOf(found);
     }
 }
