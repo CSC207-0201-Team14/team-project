@@ -4,7 +4,6 @@ import entity.FailureEvent;
 import entity.HealthCheckResult;
 import entity.Service;
 
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,15 +69,7 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
     }
 
     private void retryPendingFailures() {
-        Iterator<FailureEvent> events = pending.values().iterator();
-
-        while (events.hasNext()) {
-            FailureEvent event = events.next();
-
-            if (tryDeliver(event)) {
-                events.remove();
-            }
-        }
+        pending.values().removeIf(this::tryDeliver);
     }
 
     private void enqueueFailure(FailureEvent event) {
