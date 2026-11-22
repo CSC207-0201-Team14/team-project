@@ -79,6 +79,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
                 return;
             }
             Target target = found.get();
+            ServiceVerification targetHealth = assessTarget(target);
             ContainerState state;
             try {
                 state = containerStates.inspect(target.containerId);
@@ -90,7 +91,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
                 return;
             }
             output.presentPreview(new RecoveryPreview(target.action, target.service.getName(), target.containerId,
-                    state, policy.select(state), manualSteps(target.incident)));
+                    state, targetHealth, policy.select(state, targetHealth), manualSteps(target.incident)));
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
         }
@@ -109,6 +110,8 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
                 return;
             }
             Target target = found.get();
+            // Re-assessed rather than trusted from the preview: the target may have recovered since.
+            ServiceVerification targetHealth = assessTarget(target);
             Instant startedAt = clock.instant();
 
             ContainerState state;
@@ -121,7 +124,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
                 return;
             }
 
-            RecoveryDecision decision = policy.select(state);
+            RecoveryDecision decision = policy.select(state, targetHealth);
             if (decision.getOperation().isEmpty()) {
                 output.presentManualSteps(guidance(target.incident, decision.getExplanation()));
                 return;
@@ -223,6 +226,12 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
         }
         incidents.save(resolved);
         output.presentResolved(new ResolutionResult(resolved, record.get().getAttempts(), result));
+    }
+
+    /** The target's health from checks since its latest recorded failure; decides whether a restart is warranted. */
+    private ServiceVerification assessTarget(Target target) {
+        return verifier.assessSinceLatestFailure(target.incident, target.service, history(target.service.getId()),
+                clock.instant());
     }
 
     /**

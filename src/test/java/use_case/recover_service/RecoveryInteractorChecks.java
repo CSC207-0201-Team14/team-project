@@ -56,6 +56,10 @@ public final class RecoveryInteractorChecks {
         storageErrorsArePresented();
         manualVerificationResolvesTheIncident();
         verificationRequiresAStartedRecovery();
+        recoveredTargetIsNotRestarted();
+        targetThatRecoversAfterThePreviewIsNotRestarted();
+        failingTargetIsStillRestarted();
+        unreadableObservationsRunNoOperation();
         System.out.println("UC4 recovery interactor checks passed");
     }
 
@@ -305,6 +309,68 @@ public final class RecoveryInteractorChecks {
         check(f.output.errors.size() == 1 && f.output.errors.get(0).contains("No recovery is awaiting verification"),
                 "Without a recovery attempt or manual verification, the incident is not resolved");
         check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "Natural recovery alone does not resolve");
+    }
+
+    /**
+     * Review scenario: the DB has passed its 3 checks since failing, but the API is still failing, so the incident
+     * stays open and UC3 still recommends the DB. Its running container must not be restarted.
+     */
+    private static void recoveredTargetIsNotRestarted() {
+        Fixture f = new Fixture();
+        f.observations.passes(f.db, START.plusSeconds(50), 3);
+        f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
+
+        f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        RecoveryPreview preview = only(f.output.previews);
+        check(preview.getDecision().getKind() == RecoveryDecision.Kind.NOT_NEEDED
+                && preview.getDecision().getOperation().isEmpty(),
+                "The preview says no restart is needed for a recovered target");
+        check(preview.getTargetHealth().isVerified() && preview.getTargetHealth().getConsecutivePasses() == 3,
+                "The preview shows the passing checks behind the decision");
+
+        f.confirm();
+        check(f.containers.operations.isEmpty() && f.records.stored.isEmpty() && f.output.attempts.isEmpty(),
+                "A confirmed request runs nothing and records no attempt");
+        check(only(f.output.manual).getReason().contains("will not be restarted")
+                && !only(f.output.manual).getNextSteps().isEmpty(),
+                "The developer sees why, alongside the findings' next steps");
+        check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "The incident remains unresolved");
+    }
+
+    private static void targetThatRecoversAfterThePreviewIsNotRestarted() {
+        Fixture f = new Fixture();
+        f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        check(only(f.output.previews).getDecision().getOperation().equals(Optional.of(RecoveryOperation.RESTART)),
+                "Without checks since the failure, the preview offers a restart");
+        f.observations.passes(f.db, START.plusSeconds(50), 3);
+        f.confirm();
+        check(f.containers.operations.isEmpty() && f.output.attempts.isEmpty(),
+                "Health is re-assessed at execution, so a target that recovered meanwhile is not restarted");
+    }
+
+    private static void failingTargetIsStillRestarted() {
+        Fixture f = new Fixture();
+        f.observations.passes(f.db, START.plusSeconds(40), 3);
+        f.observations.add(f.db, START.plusSeconds(50), HealthCheckResult.Outcome.FAIL);
+        f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        check(only(f.output.previews).getDecision().getExplanation().contains("latest check failed"),
+                "The preview explains the restart with the failing check");
+        f.confirm();
+        check(f.containers.operations.equals(List.of("restart:db-container")) && only(f.output.attempts).isSucceeded(),
+                "A target whose latest check failed is restarted");
+    }
+
+    private static void unreadableObservationsRunNoOperation() {
+        Fixture f = new Fixture();
+        f.observations.failure = new ObservationStoreException("disk unreadable", null);
+        f.confirm();
+        check(f.output.errors.equals(List.of("Observations could not be read: disk unreadable")),
+                "The store error is presented");
+        check(f.containers.inspections == 0 && f.containers.operations.isEmpty() && f.records.stored.isEmpty(),
+                "Without the target's checks, nothing is inspected, run or recorded");
+
+        f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        check(f.output.errors.size() == 2 && f.output.previews.isEmpty(), "The preview reports the error instead");
     }
 
     /** API (HTTP) depends on DB (container db-container). Both fail; DB is the suspected cause. */

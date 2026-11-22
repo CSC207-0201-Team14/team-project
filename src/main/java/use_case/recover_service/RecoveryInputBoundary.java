@@ -8,12 +8,16 @@ import java.util.UUID;
  * Every outcome, including errors, is reported through the output boundary.
  */
 public interface RecoveryInputBoundary {
-    /** Step 1: shows the target container, its live state and the operation it determines. Changes nothing. */
+    /**
+     * Step 1: shows the target container, its live state, the target service's health since its latest recorded
+     * failure, and the operation they determine. Changes nothing.
+     */
     void previewRecovery(UUID incidentId, UUID actionId);
 
     /**
      * Steps 2–3: executes a confirmed, currently recommended action using the operation chosen from the
-     * container's state at execution time, and records the attempt. A successful attempt starts verification.
+     * container's state and the target's health at execution time, and records the attempt. A successful attempt
+     * starts verification. If the target has already recovered, nothing runs and no attempt is recorded.
      */
     void executeRecovery(RecoveryRequest request);
 
