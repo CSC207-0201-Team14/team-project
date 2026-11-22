@@ -71,6 +71,10 @@ public final class DomainChecks {
         Incident reassessed = assessed.updateAssessment(Set.of(dependent), List.of());
         check(reassessed.getActiveFindings().isEmpty() && reassessed.getFindingHistory().size() == 1,
                 "Reassessment preserves the previous finding");
+        check(open.getRecoveryRequiredServiceIds().equals(Set.of(service)),
+                "Recovery of a fresh incident requires only its failing service");
+        check(assessed.getRecoveryRequiredServiceIds().equals(Set.of(service, dependent)),
+                "Recovery also requires potentially affected services and active suspected causes");
 
         RecoveryAction action = new RecoveryAction(UUID.randomUUID(), reassessed.getId(), service,
                 RecoveryAction.ActionType.RECOVER_DOCKER_CONTAINER, "Recover the container");
