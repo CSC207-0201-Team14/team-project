@@ -95,7 +95,8 @@ public final class JsonIncidentRepositoryChecks {
     private static void filtersAndReplacesIncidents(Path directory) {
         JsonIncidentRepository repository = new JsonIncidentRepository(directory);
         UUID missing = UUID.randomUUID();
-        check(repository.findById(missing).isEmpty() && repository.findUnresolvedBySystemId(SYSTEM).isEmpty(),
+        check(repository.findById(missing).isEmpty() && repository.findBySystemId(SYSTEM).isEmpty()
+                && repository.findUnresolvedBySystemId(SYSTEM).isEmpty(),
                 "A new repository should be empty");
         Incident open = openIncident(SYSTEM);
         Incident investigating = openIncident(SYSTEM).startInvestigation(OPENED);
@@ -107,6 +108,10 @@ public final class JsonIncidentRepositoryChecks {
         Instant finished = OPENED.plusSeconds(1);
         repository.save(closed.resolve(finished, OPENED, Map.of(SERVICE, healthy(SERVICE, finished))));
 
+        List<Incident> history = repository.findBySystemId(SYSTEM);
+        check(history.size() == 3 && history.stream().map(Incident::getId).collect(Collectors.toSet())
+                .equals(Set.of(open.getId(), investigating.getId(), closed.getId())),
+                "System history must include its open, investigating and resolved incidents");
         List<Incident> unresolved = repository.findUnresolvedBySystemId(SYSTEM);
         check(unresolved.size() == 2 && unresolved.stream().map(Incident::getId).collect(Collectors.toSet())
                 .equals(Set.of(open.getId(), investigating.getId())), "Query must return only matching unresolved IDs");
@@ -129,12 +134,14 @@ public final class JsonIncidentRepositoryChecks {
         for (String invalid : List.of(document.toString(), "{\"schemaVersion\":1,")) {
             Files.writeString(path, invalid);
             expectDataFailure(() -> repository.findById(foreign.getId()));
+            expectDataFailure(() -> repository.findBySystemId(SYSTEM));
             expectDataFailure(() -> repository.findUnresolvedBySystemId(SYSTEM));
         }
         repository.save(foreign);
         UUID unreadableId = UUID.randomUUID();
         Files.createDirectory(directory.resolve(unreadableId + ".json"));
         expectDataFailure(() -> repository.findById(unreadableId));
+        expectDataFailure(() -> repository.findBySystemId(SYSTEM));
         expectDataFailure(() -> repository.findUnresolvedBySystemId(SYSTEM));
     }
 

@@ -4,6 +4,7 @@ import entity.HealthCheckResult;
 import entity.Incident;
 import entity.RecoveryAction;
 import java.time.Clock;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -69,6 +70,22 @@ public final class IncidentInteractor implements IncidentInputBoundary {
         }
         output.presentProcessed(result);
         return FailureProcessingResult.PROCESSED;
+    }
+
+    @Override
+    public void listIncidents(UUID systemId) {
+        List<IncidentSummary> summaries;
+        try {
+            summaries = incidents.findBySystemId(systemId).stream()
+                    .map(IncidentSummary::new)
+                    .sorted(Comparator.comparing(IncidentSummary::getOpenedAt).reversed()
+                            .thenComparing(IncidentSummary::getIncidentId))
+                    .collect(Collectors.toUnmodifiableList());
+        } catch (IncidentDataException exception) {
+            output.presentError(exception.getMessage());
+            return;
+        }
+        output.presentIncidents(summaries);
     }
 
     @Override

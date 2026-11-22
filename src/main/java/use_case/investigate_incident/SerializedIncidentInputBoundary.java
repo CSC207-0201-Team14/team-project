@@ -9,9 +9,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * Decorator that runs every incident call on one worker thread, so the monitoring thread (failures)
- * and the UI (opening incidents) never write the same incident concurrently.
- * processFailure waits for its result; openIncident returns immediately and presents through the output boundary.
+ * Runs incident calls on one worker thread. Monitoring waits for the processing result.
+ * UI requests to list or open incidents return immediately and present through the output boundary.
  */
 public final class SerializedIncidentInputBoundary implements IncidentInputBoundary, AutoCloseable {
     private final IncidentInputBoundary delegate;
@@ -63,12 +62,21 @@ public final class SerializedIncidentInputBoundary implements IncidentInputBound
         }
     }
 
-    /** Queues the request; it is ignored once this boundary is closed. */
+    @Override
+    public void listIncidents(UUID systemId) {
+        Objects.requireNonNull(systemId, "systemId");
+        queuePresentation(() -> delegate.listIncidents(systemId));
+    }
+
     @Override
     public void openIncident(UUID incidentId) {
         Objects.requireNonNull(incidentId, "incidentId");
+        queuePresentation(() -> delegate.openIncident(incidentId));
+    }
+
+    private void queuePresentation(Runnable request) {
         try {
-            worker.execute(() -> delegate.openIncident(incidentId));
+            worker.execute(request);
         } catch (RejectedExecutionException closed) {
             // Shutting down: nothing to present.
         }

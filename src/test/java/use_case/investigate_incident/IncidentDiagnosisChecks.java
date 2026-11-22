@@ -224,6 +224,7 @@ public final class IncidentDiagnosisChecks {
         private Incident incident;
         private IncidentDetails details;
         public void presentProcessed(Incident result) { incident = result; }
+        public void presentIncidents(List<IncidentSummary> result) { throw new AssertionError("Unexpected incident list"); }
         public void presentDetails(IncidentDetails result) { details = result; }
         private boolean expectError;
         private String error;

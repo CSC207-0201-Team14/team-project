@@ -14,6 +14,9 @@ public interface IncidentInputBoundary {
      */
     FailureProcessingResult processFailure(FailureInput input);
 
+    /** Presents the system's incident history, newest opening first, without changing incident status. */
+    void listIncidents(UUID systemId);
+
     /**
      * Moves an OPEN incident to INVESTIGATING and saves it before presenting details.
      * Other statuses are unchanged. Never resolves the incident or executes recovery.

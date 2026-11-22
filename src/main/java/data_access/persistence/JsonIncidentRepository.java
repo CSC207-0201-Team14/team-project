@@ -45,8 +45,17 @@ public final class JsonIncidentRepository implements IncidentRepository {
     }
 
     @Override
+    public List<Incident> findBySystemId(UUID systemId) {
+        return readSystemIncidents(systemId, true);
+    }
+
+    @Override
     public List<Incident> findUnresolvedBySystemId(UUID systemId) {
-        List<Incident> unresolved = new ArrayList<>();
+        return readSystemIncidents(systemId, false);
+    }
+
+    private List<Incident> readSystemIncidents(UUID systemId, boolean includeResolved) {
+        List<Incident> incidents = new ArrayList<>();
         try {
             if (Files.notExists(directory, LinkOption.NOFOLLOW_LINKS)) {
                 return List.of();
@@ -54,15 +63,16 @@ public final class JsonIncidentRepository implements IncidentRepository {
             try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, "*.json")) {
                 for (Path file : files) {
                     Incident incident = read(file);
-                    if (incident.getSystemId().equals(systemId) && incident.getStatus() != Incident.Status.RESOLVED) {
-                        unresolved.add(incident);
+                    if (incident.getSystemId().equals(systemId)
+                            && (includeResolved || incident.getStatus() != Incident.Status.RESOLVED)) {
+                        incidents.add(incident);
                     }
                 }
             }
         } catch (IOException | DirectoryIteratorException | SecurityException exception) {
             throw new IncidentDataException("Could not read the incidents directory " + directory + ".", exception);
         }
-        return List.copyOf(unresolved);
+        return List.copyOf(incidents);
     }
 
     private static Incident read(Path file) {

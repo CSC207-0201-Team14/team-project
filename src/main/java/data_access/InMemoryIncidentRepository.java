@@ -19,10 +19,9 @@ public final class InMemoryIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    public List<Incident> findUnresolvedBySystemId(UUID systemId) {
+    public List<Incident> findBySystemId(UUID systemId) {
         return incidents.values().stream()
                 .filter(incident -> incident.getSystemId().equals(systemId))
-                .filter(incident -> incident.getStatus() != Incident.Status.RESOLVED)
                 .collect(Collectors.toUnmodifiableList());
     }
 

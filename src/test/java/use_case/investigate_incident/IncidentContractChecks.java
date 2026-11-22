@@ -23,6 +23,7 @@ public final class IncidentContractChecks {
 
     public static void main(String[] args) {
         verifiesProcessingAndInvestigationPath();
+        listsSystemHistoryWithoutStartingInvestigation();
         reportsMissingDataAndAccessFailures();
         verifiesRepositoryScopeAndReplacement();
         System.out.println("UC3 contract checks passed");
@@ -78,6 +79,41 @@ public final class IncidentContractChecks {
                 "Unavailable graph reaches the assessment distinctly from a known empty graph");
     }
 
+    private static void listsSystemHistoryWithoutStartingInvestigation() {
+        Fixture fixture = new Fixture();
+        UUID systemId = fixture.system.getId();
+        Instant recent = TIME.plusSeconds(2);
+        HealthCheckResult recovered = new HealthCheckResult(UUID.randomUUID(), fixture.serviceId, recent,
+                HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "Recovered");
+        Incident resolved = fixture.assessed.resolve(recent, TIME,
+                Map.of(fixture.serviceId, ServiceHealth.evaluated(HealthStatus.HEALTHY, recovered)));
+        Incident open = Incident.open(new UUID(0, 1), systemId, recent, fixture.failure);
+        Incident investigating = Incident.open(new UUID(0, 2), systemId, recent, fixture.failure)
+                .startInvestigation(recent);
+        fixture.repository.save(resolved);
+        fixture.repository.save(investigating);
+        fixture.repository.save(open);
+        fixture.repository.save(Incident.open(UUID.randomUUID(), UUID.randomUUID(), recent, fixture.failure));
+
+        fixture.boundary.listIncidents(systemId);
+        List<IncidentSummary> summaries = fixture.output.summaries;
+        List<Incident> expected = List.of(open, investigating, resolved);
+        check(summaries.size() == expected.size(), "Only the selected system's history is presented");
+        for (int i = 0; i < expected.size(); i++) {
+            Incident incident = expected.get(i);
+            IncidentSummary summary = summaries.get(i);
+            check(summary.getIncidentId().equals(incident.getId()) && summary.getStatus() == incident.getStatus()
+                    && summary.getOpenedAt().equals(incident.getOpenedAt())
+                    && summary.getFailingServiceIds().equals(incident.getFailingServiceIds()),
+                    "Summaries retain incident identity, status, opening time and failing services in display order");
+        }
+        check(fixture.repository.findById(open.getId()).orElseThrow() == open && fixture.output.details == null,
+                "Listing an open incident leaves it open");
+        fixture.boundary.listIncidents(UUID.randomUUID());
+        check(fixture.output.summaries.isEmpty() && fixture.output.error == null,
+                "A system without incident history receives an empty list");
+    }
+
     private static void reportsMissingDataAndAccessFailures() {
         Fixture fixture = new Fixture();
         fixture.boundary.openIncident(UUID.randomUUID());
@@ -95,6 +131,7 @@ public final class IncidentContractChecks {
 
         IncidentRepository failingRepository = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { throw new IncidentDataException("Read failed"); }
+            public List<Incident> findBySystemId(UUID id) { throw new IncidentDataException("List failed"); }
             public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
@@ -117,10 +154,13 @@ public final class IncidentContractChecks {
                 "Invalid assessment input is rejected, presented and not saved instead of escaping");
         boundary.openIncident(fixture.assessed.getId());
         check(fixture.output.error.equals("Read failed"), "Read failure is reported");
+        boundary.listIncidents(fixture.system.getId());
+        check("List failed".equals(fixture.output.error) && fixture.output.summaries == null,
+                "A history read failure presents the storage error without publishing a list");
 
         IncidentRepository unsavable = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { return Optional.of(fixture.assessed); }
-            public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
+            public List<Incident> findBySystemId(UUID id) { return List.of(); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         fixture.output.error = null;
@@ -198,10 +238,12 @@ public final class IncidentContractChecks {
 
     private static final class CapturingOutput implements IncidentOutputBoundary {
         private Incident processed;
+        private List<IncidentSummary> summaries;
         private IncidentDetails details;
         private String error;
 
         public void presentProcessed(Incident incident) { processed = incident; }
+        public void presentIncidents(List<IncidentSummary> result) { summaries = result; }
         public void presentDetails(IncidentDetails result) { details = result; }
         public void presentError(String message) { error = message; }
     }
