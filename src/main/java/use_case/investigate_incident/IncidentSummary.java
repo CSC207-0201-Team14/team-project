@@ -2,6 +2,7 @@ package use_case.investigate_incident;
 
 import entity.Incident;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -11,12 +12,15 @@ public final class IncidentSummary {
     private final Instant openedAt;
     private final Incident.Status status;
     private final Set<UUID> failingServiceIds;
+    private final Map<UUID, String> serviceNames;
 
-    public IncidentSummary(Incident incident) {
+    /** Names come from the current roster; services no longer configured have no entry. */
+    public IncidentSummary(Incident incident, Map<UUID, String> serviceNames) {
         this.incidentId = incident.getId();
         this.openedAt = incident.getOpenedAt();
         this.status = incident.getStatus();
         this.failingServiceIds = incident.getFailingServiceIds();
+        this.serviceNames = Map.copyOf(serviceNames);
     }
 
     public UUID getIncidentId() { return incidentId; }
@@ -25,4 +29,7 @@ public final class IncidentSummary {
 
     /** Services with a recorded failure in this incident, including those that have since recovered. */
     public Set<UUID> getFailingServiceIds() { return failingServiceIds; }
+
+    /** Configured names keyed by service ID; look up failing services here and fall back to the ID. */
+    public Map<UUID, String> getServiceNames() { return serviceNames; }
 }

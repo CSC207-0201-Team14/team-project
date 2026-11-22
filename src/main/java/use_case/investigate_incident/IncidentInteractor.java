@@ -3,6 +3,7 @@ package use_case.investigate_incident;
 import entity.HealthCheckResult;
 import entity.Incident;
 import entity.RecoveryAction;
+import entity.Service;
 import java.time.Clock;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -76,8 +77,9 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     public void listIncidents(UUID systemId) {
         List<IncidentSummary> summaries;
         try {
+            Map<UUID, String> names = serviceNames(configurations.findBySystemId(systemId));
             summaries = incidents.findBySystemId(systemId).stream()
-                    .map(IncidentSummary::new)
+                    .map(incident -> new IncidentSummary(incident, names))
                     .sorted(Comparator.comparing(IncidentSummary::getOpenedAt).reversed()
                             .thenComparing(IncidentSummary::getIncidentId))
                     .collect(Collectors.toUnmodifiableList());
@@ -118,15 +120,23 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                 evidence.putAll(observations.findByIds(relatedServices(incident), Set.copyOf(missing)));
             }
             missing.removeAll(evidence.keySet());
-            List<RecoveryAction> recommended = configurations.findBySystemId(incident.getSystemId())
-                    .map(configuration -> recommendations.recommend(opened, configuration))
+            Optional<ConfigurationSnapshot> configuration = configurations.findBySystemId(incident.getSystemId());
+            List<RecoveryAction> recommended = configuration
+                    .map(snapshot -> recommendations.recommend(opened, snapshot))
                     .orElse(List.of());
-            details = new IncidentDetails(opened, evidence, missing, recommended);
+            details = new IncidentDetails(opened, evidence, missing, recommended, serviceNames(configuration));
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
             return;
         }
         output.presentDetails(details);
+    }
+
+    /** Names from the current roster; empty when the system configuration is missing. */
+    private static Map<UUID, String> serviceNames(Optional<ConfigurationSnapshot> configuration) {
+        return configuration.map(snapshot -> snapshot.getSystem().getServices().stream()
+                        .collect(Collectors.toUnmodifiableMap(Service::getId, Service::getName)))
+                .orElse(Map.of());
     }
 
     /** Services whose observations the incident can cite: failures, findings, their edges and resolution. */

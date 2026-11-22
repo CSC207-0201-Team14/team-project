@@ -23,6 +23,7 @@ public final class IncidentContractChecks {
 
     public static void main(String[] args) {
         verifiesProcessingAndInvestigationPath();
+        opensDetailsWithCurrentServiceNames();
         listsSystemHistoryWithoutStartingInvestigation();
         reportsMissingDataAndAccessFailures();
         verifiesRepositoryScopeAndReplacement();
@@ -48,6 +49,8 @@ public final class IncidentContractChecks {
 
         fixture.boundary.openIncident(fixture.assessed.getId());
         IncidentDetails details = fixture.output.details;
+        check(details.getServiceNames().equals(Map.of(fixture.serviceId, "Database")),
+                "The presenter receives the configured name for the failing service");
         check(details.getObservations().keySet().equals(Set.of(fixture.failed.getId(), fixture.passed.getId())),
                 "Details combine retained failure evidence with historical observation lookup");
         check(details.getMissingObservationIds().isEmpty(), "All evidence is available");
@@ -79,6 +82,29 @@ public final class IncidentContractChecks {
                 "Unavailable graph reaches the assessment distinctly from a known empty graph");
     }
 
+    private static void opensDetailsWithCurrentServiceNames() {
+        Fixture fixture = new Fixture();
+        fixture.repository.save(fixture.assessed);
+        Service database = fixture.system.getServices().get(0);
+        Service api = new Service(UUID.randomUUID(), fixture.system.getId(), "Orders API",
+                MonitoringTarget.docker("api"), database.getMonitoringPolicy());
+        MonitoredSystem system = new MonitoredSystem(fixture.system.getId(), "Orders", "",
+                List.of(database, api), List.of());
+        fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(system, "Graph unavailable");
+        fixture.boundary.openIncident(fixture.assessed.getId());
+        IncidentDetails details = fixture.output.details;
+        check(details.getServiceNames().equals(Map.of(database.getId(), "Database", api.getId(), "Orders API")),
+                "Details include the configured service names even when dependencies are unavailable");
+        check(fixture.configurationReads == 1, "Opening an incident reads the configuration once");
+
+        fixture.configuration = null;
+        fixture.boundary.openIncident(fixture.assessed.getId());
+        IncidentDetails historical = fixture.output.details;
+        check(historical.getIncident().getId().equals(fixture.assessed.getId())
+                && historical.getServiceNames().isEmpty() && historical.getRecommendedActions().isEmpty()
+                && fixture.output.error == null, "Details remain available when the system configuration is missing");
+    }
+
     private static void listsSystemHistoryWithoutStartingInvestigation() {
         Fixture fixture = new Fixture();
         UUID systemId = fixture.system.getId();
@@ -107,11 +133,18 @@ public final class IncidentContractChecks {
                     && summary.getFailingServiceIds().equals(incident.getFailingServiceIds()),
                     "Summaries retain incident identity, status, opening time and failing services in display order");
         }
+        check(summaries.get(0).getServiceNames().equals(Map.of(fixture.serviceId, "Database")),
+                "Summaries carry configured names so the list can show services by name");
         check(fixture.repository.findById(open.getId()).orElseThrow() == open && fixture.output.details == null,
                 "Listing an open incident leaves it open");
         fixture.boundary.listIncidents(UUID.randomUUID());
         check(fixture.output.summaries.isEmpty() && fixture.output.error == null,
                 "A system without incident history receives an empty list");
+        fixture.configuration = null;
+        fixture.boundary.listIncidents(systemId);
+        check(fixture.output.summaries.size() == expected.size()
+                && fixture.output.summaries.get(0).getServiceNames().isEmpty() && fixture.output.error == null,
+                "History remains listable without names when the configuration is missing");
     }
 
     private static void reportsMissingDataAndAccessFailures() {
@@ -200,6 +233,7 @@ public final class IncidentContractChecks {
         private final Map<UUID, HealthCheckResult> retained = new HashMap<>();
         private final CapturingOutput output = new CapturingOutput();
         private ConfigurationSnapshot configuration;
+        private int configurationReads;
         private ConfigurationSnapshot seenConfiguration;
         private List<Incident> seenUnresolved;
         private Set<UUID> seenServiceIds;
@@ -217,7 +251,10 @@ public final class IncidentContractChecks {
             assessed = Incident.open(UUID.randomUUID(), systemId, TIME, failure)
                     .updateAssessment(Set.of(), List.of(history)).updateAssessment(Set.of(), List.of());
             retained.put(passed.getId(), passed);
-            boundary = new IncidentInteractor(id -> Optional.ofNullable(configuration), (services, ids) -> {
+            boundary = new IncidentInteractor(id -> {
+                configurationReads++;
+                return Optional.ofNullable(configuration);
+            }, (services, ids) -> {
                 seenServiceIds = services;
                 Map<UUID, HealthCheckResult> found = new HashMap<>();
                 for (UUID id : ids) {
