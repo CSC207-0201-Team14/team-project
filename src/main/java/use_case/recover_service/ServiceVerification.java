@@ -5,7 +5,10 @@ import entity.ServiceHealth;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Verification progress for one service that must recover before the incident can be resolved. */
+/**
+ * One service's recovery progress against its recovery threshold, evaluated by RecoveryVerifier over a window:
+ * since verification started (resolution), or since the service's latest recorded failure (restart guard).
+ */
 public final class ServiceVerification {
     private final UUID serviceId;
     private final ServiceHealth health;
@@ -26,7 +29,7 @@ public final class ServiceVerification {
     }
 
     public UUID getServiceId() { return serviceId; }
-    /** Health evaluated only from checks recorded since verification started. */
+    /** Health evaluated only from checks recorded inside the evaluation window. */
     public ServiceHealth getHealth() { return health; }
     public int getConsecutivePasses() { return consecutivePasses; }
     /** The service's configured recovery threshold, or 0 when the service is no longer configured. */

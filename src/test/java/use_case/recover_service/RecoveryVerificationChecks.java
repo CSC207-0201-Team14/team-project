@@ -37,6 +37,9 @@ public final class RecoveryVerificationChecks {
         satisfiedResultResolvesTheIncident();
         laterFailureMovesTheServiceWindow();
         unconfiguredServiceCannotBeVerified();
+        assessmentCountsOnlyChecksAfterTheLatestFailure();
+        assessmentReportsHealthAgainstTheThreshold();
+        assessmentFollowsALaterFailure();
         System.out.println("UC4 recovery verification checks passed");
     }
 
@@ -144,6 +147,53 @@ public final class RecoveryVerificationChecks {
                 "A required service missing from the configuration cannot be verified");
     }
 
+    private static void assessmentCountsOnlyChecksAfterTheLatestFailure() {
+        Fixture f = new Fixture();
+        f.record(f.db, 1, HealthCheckResult.Outcome.PASS);
+        f.record(f.db, 2, HealthCheckResult.Outcome.PASS);
+        f.record(f.db, 3, HealthCheckResult.Outcome.PASS);
+        f.record(f.db, 5, HealthCheckResult.Outcome.FAIL);
+        ServiceVerification before = f.assess(f.dbOnlyIncident());
+        check(before.getConsecutivePasses() == 0 && before.getHealth().getStatus() == HealthStatus.UNKNOWN
+                && before.getExplanation().contains("since its last recorded failure"),
+                "Passes before the failure, and the failing check itself, are not counted");
+        f.passes(f.db, 40, 3);
+        ServiceVerification after = f.assess(f.dbOnlyIncident());
+        check(after.isVerified() && after.getConsecutivePasses() == 3
+                && after.getExplanation().contains("since its last recorded failure"),
+                "Passes after the failure count, without any verification having started");
+    }
+
+    private static void assessmentReportsHealthAgainstTheThreshold() {
+        Fixture partial = new Fixture();
+        partial.passes(partial.db, 40, 2);
+        ServiceVerification recovering = partial.assess(partial.dbOnlyIncident());
+        check(recovering.getHealth().getStatus() == HealthStatus.UNKNOWN && recovering.getConsecutivePasses() == 2
+                && recovering.getRequiredPasses() == 3, "Passes below the threshold leave health unknown");
+
+        Fixture failing = new Fixture();
+        failing.passes(failing.db, 40, 3);
+        failing.record(failing.db, 50, HealthCheckResult.Outcome.FAIL);
+        check(failing.assess(failing.dbOnlyIncident()).getHealth().getStatus() == HealthStatus.UNHEALTHY,
+                "A failing latest check is unhealthy even after earlier passes met the threshold");
+
+        Fixture unobserved = new Fixture();
+        ServiceVerification none = unobserved.assess(unobserved.dbOnlyIncident());
+        check(none.getHealth().getStatus() == HealthStatus.UNKNOWN && none.getHealth().getLatestResult().isEmpty(),
+                "Without checks since the failure, health is unknown");
+    }
+
+    private static void assessmentFollowsALaterFailure() {
+        Fixture f = new Fixture();
+        f.passes(f.db, 40, 3);
+        HealthCheckResult lateFailure = f.record(f.db, 150, HealthCheckResult.Outcome.FAIL);
+        Incident updated = f.dbOnlyIncident().recordFailure(
+                new FailureEvent(UUID.randomUUID(), f.db.getId(), START.plusSeconds(150), List.of(lateFailure)));
+        check(!f.assess(updated).isVerified(), "Passes before a later recorded failure do not count");
+        f.passes(f.db, 160, 3);
+        check(f.assess(updated).isVerified(), "Passes after the latest failure count");
+    }
+
     private static final class Fixture {
         final UUID systemId = UUID.randomUUID();
         final MonitoringPolicy dbPolicy = new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 3);
@@ -186,6 +236,11 @@ public final class RecoveryVerificationChecks {
 
         VerificationResult evaluate(Incident incident) {
             return VERIFIER.evaluate(incident, WINDOW, Map.of(db.getId(), db, api.getId(), api), observations, NOW);
+        }
+
+        ServiceVerification assess(Incident incident) {
+            return VERIFIER.assessSinceLatestFailure(incident, db, observations.getOrDefault(db.getId(), List.of()),
+                    NOW);
         }
     }
 
