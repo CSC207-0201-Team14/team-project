@@ -2,10 +2,8 @@ package use_case.configure_monitored_system;
 
 import entity.MonitoredSystem;
 
-import java.util.List;
-
 public interface ConfigurationOutputBoundary {
-    void presentSystems(List<MonitoredSystem> systems);
+    void presentSystems(ConfigurationLoadResult result);
 
     void presentSaved(MonitoredSystem system);
 

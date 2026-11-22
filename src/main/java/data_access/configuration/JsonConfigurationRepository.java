@@ -12,6 +12,7 @@ import entity.MonitoredSystem;
 import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
 import entity.Service;
+import use_case.configure_monitored_system.ConfigurationLoadResult;
 import use_case.configure_monitored_system.ConfigurationRepository;
 import use_case.configure_monitored_system.ConfigurationStoreException;
 
@@ -44,22 +45,28 @@ public final class JsonConfigurationRepository implements ConfigurationRepositor
     }
 
     @Override
-    public List<MonitoredSystem> findAll() {
+    public ConfigurationLoadResult findAll() {
         List<MonitoredSystem> systems = new ArrayList<>();
+        List<String> skippedFiles = new ArrayList<>();
         try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, "*" + EXTENSION)) {
             for (Path file : files) {
                 String name = file.getFileName().toString();
-                UUID id = UUID.fromString(name.substring(0, name.length() - EXTENSION.length()));
-                read(file, id).ifPresent(systems::add);
+                try {
+                    UUID id = UUID.fromString(name.substring(0, name.length() - EXTENSION.length()));
+                    read(file, id).ifPresent(systems::add);
+                } catch (IllegalArgumentException | ConfigurationStoreException exception) {
+                    skippedFiles.add(name);
+                }
             }
         } catch (NoSuchFileException exception) {
-            return List.of();
-        } catch (IOException | DirectoryIteratorException | IllegalArgumentException | SecurityException exception) {
+            return new ConfigurationLoadResult(List.of(), List.of());
+        } catch (IOException | DirectoryIteratorException | SecurityException exception) {
             throw new ConfigurationStoreException("Could not read the systems directory.", exception);
         }
         systems.sort(Comparator.comparing(MonitoredSystem::getName, String.CASE_INSENSITIVE_ORDER)
                 .thenComparing(MonitoredSystem::getId));
-        return List.copyOf(systems);
+        skippedFiles.sort(Comparator.naturalOrder());
+        return new ConfigurationLoadResult(systems, skippedFiles);
     }
 
     @Override

@@ -21,6 +21,7 @@ public final class ConfigurationInteractorChecks {
     public static void main(String[] args) {
         savesAndRetrievesServiceAndDependencyEdits();
         rejectsInvalidDraftsBeforeWriting();
+        passesSkippedFileNamesToOutput();
         reportsStorageErrorsAndAllowsRetry();
         System.out.println("UC1 interactor checks passed.");
     }
@@ -92,6 +93,17 @@ public final class ConfigurationInteractorChecks {
         require(repository.saves == 1 && repository.saved == original, "Invalid drafts must never alter saved data");
     }
 
+    private static void passesSkippedFileNamesToOutput() {
+        MemoryRepository repository = new MemoryRepository();
+        repository.skippedFiles = List.of("unreadable.json");
+        Output output = new Output();
+        ConfigurationInputBoundary input = new ConfigurationInteractor(repository, output);
+        input.save(draft(List.of(HTTP), List.of()));
+        input.loadSystems();
+        require(output.systems.size() == 1 && output.skippedFiles.equals(repository.skippedFiles)
+                && output.error == null, "Present valid systems and skipped files together");
+    }
+
     private static void reportsStorageErrorsAndAllowsRetry() {
         MemoryRepository repository = new MemoryRepository();
         Output output = new Output();
@@ -134,17 +146,18 @@ public final class ConfigurationInteractorChecks {
     private static final class MemoryRepository implements ConfigurationRepository {
         private MonitoredSystem saved;
         private boolean unavailable;
+        private List<String> skippedFiles = List.of();
         private int saves;
 
         @Override
-        public List<MonitoredSystem> findAll() {
+        public ConfigurationLoadResult findAll() {
             checkStorage();
-            return saved == null ? List.of() : List.of(saved);
+            return new ConfigurationLoadResult(saved == null ? List.of() : List.of(saved), skippedFiles);
         }
 
         @Override
         public Optional<MonitoredSystem> findById(UUID systemId) {
-            return findAll().stream().filter(system -> system.getId().equals(systemId)).findFirst();
+            return findAll().getSystems().stream().filter(system -> system.getId().equals(systemId)).findFirst();
         }
 
         @Override
@@ -164,11 +177,13 @@ public final class ConfigurationInteractorChecks {
     private static final class Output implements ConfigurationOutputBoundary {
         private MonitoredSystem saved;
         private List<MonitoredSystem> systems;
+        private List<String> skippedFiles;
         private String error;
 
         @Override
-        public void presentSystems(List<MonitoredSystem> systems) {
-            this.systems = systems;
+        public void presentSystems(ConfigurationLoadResult result) {
+            systems = result.getSystems();
+            skippedFiles = result.getSkippedFiles();
         }
 
         @Override

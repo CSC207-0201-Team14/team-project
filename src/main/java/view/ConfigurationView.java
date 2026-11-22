@@ -168,14 +168,25 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
     }
 
     @Override
-    public void showSystems(List<MonitoredSystem> loaded) {
+    public void showSystems(List<MonitoredSystem> loaded, List<String> skippedFiles) {
         MonitoredSystem selected = loaded.stream().filter(system -> system.getId().equals(systemId))
                 .findFirst().orElseGet(() -> loaded.isEmpty() ? null : loaded.get(0));
         systems.clear();
         systems.addAll(loaded);
         refreshPicker();
         openDraft(selected);
-        setBusy(false, loaded.isEmpty() ? "New system" : "Loaded saved systems");
+        if (skippedFiles.isEmpty()) {
+            setBusy(false, loaded.isEmpty() ? "New system" : "Loaded saved systems");
+            return;
+        }
+
+        setBusy(false, "Some configurations could not be loaded");
+        JTextArea files = new JTextArea(String.join("\n", skippedFiles), Math.min(skippedFiles.size(), 8), 42);
+        files.setEditable(false);
+        files.setCaretPosition(0);
+        JOptionPane.showMessageDialog(this,
+                new Object[]{"These configuration files were skipped:", new JScrollPane(files)},
+                "Configuration warning", JOptionPane.WARNING_MESSAGE);
     }
 
     @Override

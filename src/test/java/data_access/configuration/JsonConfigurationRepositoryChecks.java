@@ -5,6 +5,7 @@ import entity.MonitoredSystem;
 import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
 import entity.Service;
+import use_case.configure_monitored_system.ConfigurationLoadResult;
 import use_case.configure_monitored_system.ConfigurationStoreException;
 
 import java.io.IOException;
@@ -23,6 +24,7 @@ public final class JsonConfigurationRepositoryChecks {
         Path directory = Files.createTempDirectory("sentinel-config-checks");
         try {
             roundTripsAndReplacesSystem(directory.resolve("systems"));
+            loadsValidSystemsAlongsideBadFiles(directory.resolve("mixed-configurations"));
             handlesStorageErrors(directory);
         } finally {
             try (Stream<Path> files = Files.walk(directory)) {
@@ -38,7 +40,9 @@ public final class JsonConfigurationRepositoryChecks {
         JsonConfigurationRepository writer = new JsonConfigurationRepository(directory);
         UUID systemId = UUID.randomUUID();
         UUID otherId = UUID.randomUUID();
-        require(writer.findAll().isEmpty() && writer.findById(systemId).isEmpty(), "Missing directory is empty");
+        ConfigurationLoadResult missing = writer.findAll();
+        require(missing.getSystems().isEmpty() && missing.getSkippedFiles().isEmpty()
+                && writer.findById(systemId).isEmpty(), "Missing directory is empty");
         MonitoringPolicy policy = new MonitoringPolicy(Duration.ofMillis(250), Duration.ofNanos(2000001), 4, 2);
         URI endpoint = URI.create("https://localhost:8443/health?q=a%2Fb");
         Service http = new Service(UUID.randomUUID(), systemId, "Order API", MonitoringTarget.http(endpoint), policy);
@@ -53,7 +57,9 @@ public final class JsonConfigurationRepositoryChecks {
         List<Service> loadedServices = loaded.getServices();
         require(loaded.getId().equals(systemId) && loaded.getName().equals("Orders")
                 && loaded.getDescription().equals(description), "System metadata survives reload");
-        require(reader.findAll().size() == 2 && reader.findAll().get(0).getId().equals(otherId), "Sorted system list");
+        ConfigurationLoadResult result = reader.findAll();
+        require(result.getSystems().size() == 2 && result.getSystems().get(0).getId().equals(otherId)
+                && result.getSkippedFiles().isEmpty(), "Sorted system list");
         require(loadedServices.get(0).getId().equals(http.getId())
                 && loadedServices.get(0).getSystemId().equals(systemId)
                 && loadedServices.get(0).getName().equals("Order API")
@@ -82,6 +88,26 @@ public final class JsonConfigurationRepositoryChecks {
         }
     }
 
+    private static void loadsValidSystemsAlongsideBadFiles(Path directory) throws IOException {
+        UUID validId = UUID.randomUUID();
+        UUID corruptId = UUID.randomUUID();
+        JsonConfigurationRepository repository = new JsonConfigurationRepository(directory);
+        repository.save(new MonitoredSystem(validId, "Readable system", "", List.of(), List.of()));
+        String corruptName = corruptId + ".json";
+        Path corrupt = Files.writeString(directory.resolve(corruptName), "{ broken json");
+        Path invalid = Files.writeString(directory.resolve("not-a-system-id.json"), "{}");
+        Files.writeString(directory.resolve("ignored.tmp"), "");
+
+        ConfigurationLoadResult result = repository.findAll();
+        require(result.getSystems().size() == 1 && result.getSystems().get(0).getId().equals(validId),
+                "A bad file does not hide readable systems");
+        require(result.getSkippedFiles().equals(List.of(corruptName, "not-a-system-id.json")),
+                "Both corrupt JSON and invalid file names are reported");
+        require(Files.readString(corrupt).equals("{ broken json") && Files.readString(invalid).equals("{}"),
+                "Skipped files remain available for repair");
+        expectStorageError(() -> repository.findById(corruptId));
+    }
+
     private static void handlesStorageErrors(Path directory) throws IOException {
         UUID id = UUID.randomUUID();
         Path fileInsteadOfDirectory = Files.createFile(directory.resolve("blocked"));
@@ -92,7 +118,6 @@ public final class JsonConfigurationRepositoryChecks {
         Path corrupt = Files.writeString(directory.resolve(id + ".json"), "{ broken json");
         JsonConfigurationRepository reader = new JsonConfigurationRepository(directory);
         expectStorageError(() -> reader.findById(id));
-        expectStorageError(reader::findAll);
         require(Files.readString(corrupt).equals("{ broken json"), "Reading invalid data leaves the file untouched");
         Files.writeString(corrupt, "{\"id\": \"" + id + "\", \"services\": {}}");
         expectStorageError(() -> reader.findById(id));

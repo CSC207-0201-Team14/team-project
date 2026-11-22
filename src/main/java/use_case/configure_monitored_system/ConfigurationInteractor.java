@@ -24,14 +24,14 @@ public final class ConfigurationInteractor implements ConfigurationInputBoundary
 
     @Override
     public void loadSystems() {
-        List<MonitoredSystem> systems;
+        ConfigurationLoadResult result;
         try {
-            systems = List.copyOf(repository.findAll());
+            result = repository.findAll();
         } catch (ConfigurationStoreException exception) {
             output.presentError("Could not load systems. " + exception.getMessage());
             return;
         }
-        output.presentSystems(systems);
+        output.presentSystems(result);
     }
 
     @Override
