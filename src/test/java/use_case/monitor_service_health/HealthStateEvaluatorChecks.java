@@ -39,6 +39,7 @@ public final class HealthStateEvaluatorChecks {
     public static void main(String[] args) {
         checksThresholdsAndEvents();
         checksRecoveryAndErrors();
+        checksMonitoringErrorEventCount();
 
         System.out.println("HealthStateEvaluatorChecks passed");
     }
@@ -72,8 +73,11 @@ public final class HealthStateEvaluatorChecks {
 
         require(continuing.getHealth().getStatus() == HealthStatus.UNHEALTHY,
                 "Continued failures should keep the service unhealthy");
-        require(continuing.getFailureEvent().isEmpty(),
-                "Continued failures should not produce another event");
+        require(continuing.getFailureEvent().isPresent(),
+                "The current unhealthy episode should retain its event");
+
+        require(continuing.getFailureEvents().size() == 1,
+                "Continued failures should retain exactly one historical event");
     }
 
     private static void checksRecoveryAndErrors() {
@@ -159,5 +163,44 @@ public final class HealthStateEvaluatorChecks {
         if (!condition) {
             throw new AssertionError(message);
         }
+    }
+
+    private static void checksMonitoringErrorEventCount() {
+        Service service = new Service(
+                SERVICE.getId(),
+                SERVICE.getSystemId(),
+                "Threshold-two service",
+                SERVICE.getMonitoringTarget(),
+                new MonitoringPolicy(
+                        Duration.ofSeconds(10),
+                        Duration.ofSeconds(2),
+                        2,
+                        2
+                )
+        );
+
+        List<HealthCheckResult> observations = history(
+                FAIL, FAIL, MONITORING_ERROR, FAIL, FAIL
+        );
+
+        HealthEvaluation evaluation = EVALUATOR.evaluate(service, observations);
+
+        require(evaluation.getFailureEvents().size() == 2,
+                "A monitoring error should separate two threshold crossings");
+
+        var first = evaluation.getFailureEvents().get(0);
+        var second = evaluation.getFailureEvents().get(1);
+
+        require(!first.getId().equals(second.getId()),
+                "Separate failure episodes should have distinct event IDs");
+
+        require(first.getEvidence().equals(observations.subList(0, 2)),
+                "The first event should retain the checks before the error");
+
+        require(second.getEvidence().equals(observations.subList(3, 5)),
+                "The second event should retain the checks after the error");
+
+        require(evaluation.getHealth().getStatus() == HealthStatus.UNHEALTHY,
+                "The final failure streak should make the service unhealthy");
     }
 }

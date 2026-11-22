@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class MonitoringInteractor implements MonitoringInputBoundary {
 
@@ -19,6 +21,7 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
     private final HealthStateEvaluator evaluator = new HealthStateEvaluator();
 
     private final Map<UUID, FailureEvent> pending = new LinkedHashMap<>();
+    private final Set<UUID> confirmed = new HashSet<>();
 
     public MonitoringInteractor(
             HealthChecker checker,
@@ -64,7 +67,7 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
 
         HealthEvaluation evaluation = evaluator.evaluate(service, history);
 
-        evaluation.getFailureEvent().ifPresent(this::enqueueFailure);
+        evaluation.getFailureEvents().forEach(this::enqueueFailure);
         output.presentHealth(evaluation.getHealth());
     }
 
@@ -73,7 +76,8 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
     }
 
     private void enqueueFailure(FailureEvent event) {
-        if (pending.containsKey(event.getId())) {
+        if (confirmed.contains(event.getId())
+                || pending.containsKey(event.getId())) {
             return;
         }
 
@@ -86,7 +90,13 @@ public final class MonitoringInteractor implements MonitoringInputBoundary {
 
     private boolean tryDeliver(FailureEvent event) {
         try {
-            return listener.deliver(event);
+            boolean acknowledged = listener.deliver(event);
+
+            if (acknowledged) {
+                confirmed.add(event.getId());
+            }
+
+            return acknowledged;
         } catch (RuntimeException exception) {
             output.presentError(
                     "Could not deliver failure event "

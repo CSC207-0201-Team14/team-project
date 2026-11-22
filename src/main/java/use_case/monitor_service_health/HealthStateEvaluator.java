@@ -55,10 +55,9 @@ public final class HealthStateEvaluator {
         int consecutivePasses = 0;
         List<HealthCheckResult> consecutiveFailures = new ArrayList<>();
         FailureEvent latestFailure = null;
+        List<FailureEvent> failureEvents = new ArrayList<>();
 
         for (HealthCheckResult result : observations) {
-            latestFailure = null;
-
             switch (result.getOutcome()) {
                 case PASS:
                     consecutiveFailures.clear();
@@ -67,6 +66,7 @@ public final class HealthStateEvaluator {
                     if (consecutivePasses
                             >= service.getMonitoringPolicy().getRecoveryThreshold()) {
                         status = HealthStatus.HEALTHY;
+                        latestFailure = null;
                     }
                     break;
 
@@ -90,6 +90,8 @@ public final class HealthStateEvaluator {
                                 result.getTimestamp(),
                                 consecutiveFailures
                         );
+
+                        failureEvents.add(latestFailure);
                     }
                     break;
 
@@ -97,6 +99,7 @@ public final class HealthStateEvaluator {
                     consecutivePasses = 0;
                     consecutiveFailures.clear();
                     status = HealthStatus.UNKNOWN;
+                    latestFailure = null;
                     break;
             }
         }
@@ -105,7 +108,8 @@ public final class HealthStateEvaluator {
 
         return new HealthEvaluation(
                 ServiceHealth.evaluated(status, latest),
-                latestFailure
+                latestFailure,
+                failureEvents
         );
     }
 }
