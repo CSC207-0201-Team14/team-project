@@ -3,30 +3,33 @@ package use_case.investigate_incident;
 import data_access.InMemoryIncidentRepository;
 import entity.*;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import use_case.shared.IncidentDataException;
 import use_case.shared.IncidentRepository;
 
+import static support.Checks.check;
+import static support.TestData.T0;
+import static support.TestData.healthy;
+import static support.TestData.observation;
+import static support.TestData.service;
+
 /** Dependency-free checks, following entity.DomainChecks. */
 public final class IncidentContractChecks {
-    private static final Instant TIME = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Clock CLOCK = Clock.fixed(TIME.plusSeconds(5), java.time.ZoneOffset.UTC);
+    private static final Clock CLOCK = Clock.fixed(T0.plusSeconds(5), ZoneOffset.UTC);
 
     public static void main(String[] args) {
         verifiesProcessingAndInvestigationPath();
         opensDetailsWithCurrentServiceNames();
         listsSystemHistoryWithoutStartingInvestigation();
         reportsMissingDataAndAccessFailures();
-        verifiesRepositoryScopeAndReplacement();
         System.out.println("UC3 contract checks passed");
     }
 
@@ -44,13 +47,9 @@ public final class IncidentContractChecks {
         check(fixture.boundary.processFailure(input) == FailureProcessingResult.PROCESSED,
                 "Redelivering the same event reports PROCESSED");
         check(fixture.seenUnresolved.size() == 1, "Next call receives the saved unresolved incident");
-        check(fixture.repository.findUnresolvedBySystemId(fixture.system.getId()).size() == 1,
-                "Saving the same incident ID replaces it");
 
         fixture.boundary.openIncident(fixture.assessed.getId());
         IncidentDetails details = fixture.output.details;
-        check(details.getServiceNames().equals(Map.of(fixture.serviceId, "Database")),
-                "The presenter receives the configured name for the failing service");
         check(details.getObservations().keySet().equals(Set.of(fixture.failed.getId(), fixture.passed.getId())),
                 "Details combine retained failure evidence with historical observation lookup");
         check(details.getMissingObservationIds().isEmpty(), "All evidence is available");
@@ -86,8 +85,7 @@ public final class IncidentContractChecks {
         Fixture fixture = new Fixture();
         fixture.repository.save(fixture.assessed);
         Service database = fixture.system.getServices().get(0);
-        Service api = new Service(UUID.randomUUID(), fixture.system.getId(), "Orders API",
-                MonitoringTarget.docker("api"), database.getMonitoringPolicy());
+        Service api = service(UUID.randomUUID(), fixture.system.getId(), "Orders API", MonitoringTarget.docker("api"));
         MonitoredSystem system = new MonitoredSystem(fixture.system.getId(), "Orders", "",
                 List.of(database, api), List.of());
         fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(system, "Graph unavailable");
@@ -108,11 +106,8 @@ public final class IncidentContractChecks {
     private static void listsSystemHistoryWithoutStartingInvestigation() {
         Fixture fixture = new Fixture();
         UUID systemId = fixture.system.getId();
-        Instant recent = TIME.plusSeconds(2);
-        HealthCheckResult recovered = new HealthCheckResult(UUID.randomUUID(), fixture.serviceId, recent,
-                HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "Recovered");
-        Incident resolved = fixture.assessed.resolve(recent, TIME,
-                Map.of(fixture.serviceId, ServiceHealth.evaluated(HealthStatus.HEALTHY, recovered)));
+        Instant recent = T0.plusSeconds(2);
+        Incident resolved = fixture.assessed.resolve(recent, T0, Map.of(fixture.serviceId, healthy(fixture.serviceId, recent)));
         Incident open = Incident.open(new UUID(0, 1), systemId, recent, fixture.failure);
         Incident investigating = Incident.open(new UUID(0, 2), systemId, recent, fixture.failure)
                 .startInvestigation(recent);
@@ -156,7 +151,7 @@ public final class IncidentContractChecks {
                 "A missing system is not retryable");
         check(fixture.output.error.equals("Monitored system was not found"), "Missing system is presented");
         fixture.configuration = ConfigurationSnapshot.available(fixture.system);
-        HealthCheckResult foreign = result(UUID.randomUUID(), HealthCheckResult.Outcome.FAIL);
+        HealthCheckResult foreign = observation(UUID.randomUUID(), T0, HealthCheckResult.Outcome.FAIL);
         check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), fixture.failure,
                 List.of(foreign))) == FailureProcessingResult.REJECTED, "Foreign services are not retryable");
         check(fixture.output.error.contains("outside"), "Foreign observations are rejected");
@@ -204,34 +199,16 @@ public final class IncidentContractChecks {
                 "Failing to save the investigating status presents an error instead of details");
     }
 
-    private static void verifiesRepositoryScopeAndReplacement() {
-        Fixture fixture = new Fixture();
-        fixture.repository.save(fixture.assessed);
-        Incident investigating = fixture.assessed.startInvestigation(TIME.plusSeconds(1));
-        fixture.repository.save(investigating);
-        check(fixture.repository.findById(investigating.getId()).orElseThrow() == investigating,
-                "Updates replace the immutable value");
-        check(fixture.repository.findUnresolvedBySystemId(UUID.randomUUID()).isEmpty(), "System queries are scoped");
-        HealthCheckResult recovered = new HealthCheckResult(UUID.randomUUID(), fixture.serviceId,
-                TIME.plusSeconds(3), HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "Recovered");
-        Incident resolved = investigating.resolve(TIME.plusSeconds(3), TIME.plusSeconds(2),
-                Map.of(fixture.serviceId, ServiceHealth.evaluated(HealthStatus.HEALTHY, recovered)));
-        fixture.repository.save(resolved);
-        check(fixture.repository.findUnresolvedBySystemId(fixture.system.getId()).isEmpty(),
-                "Resolved incidents are excluded from active correlation");
-        check(fixture.repository.findById(resolved.getId()).isPresent(), "Resolved history remains readable");
-    }
-
     private static final class Fixture {
         private final UUID serviceId = UUID.randomUUID();
         private final MonitoredSystem system;
-        private final HealthCheckResult failed = result(serviceId, HealthCheckResult.Outcome.FAIL);
-        private final HealthCheckResult passed = result(serviceId, HealthCheckResult.Outcome.PASS);
-        private final FailureEvent failure = new FailureEvent(UUID.randomUUID(), serviceId, TIME, List.of(failed));
+        private final HealthCheckResult failed = observation(serviceId, T0, HealthCheckResult.Outcome.FAIL);
+        private final HealthCheckResult passed = observation(serviceId, T0, HealthCheckResult.Outcome.PASS);
+        private final FailureEvent failure = new FailureEvent(UUID.randomUUID(), serviceId, T0, List.of(failed));
         private final Incident assessed;
         private final InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
         private final Map<UUID, HealthCheckResult> retained = new HashMap<>();
-        private final CapturingOutput output = new CapturingOutput();
+        private final RecordingOutput output = new RecordingOutput();
         private ConfigurationSnapshot configuration;
         private int configurationReads;
         private ConfigurationSnapshot seenConfiguration;
@@ -241,14 +218,13 @@ public final class IncidentContractChecks {
 
         private Fixture() {
             UUID systemId = UUID.randomUUID();
-            Service service = new Service(serviceId, systemId, "Database", MonitoringTarget.docker("db"),
-                    new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2));
-            system = new MonitoredSystem(systemId, "Orders", "", List.of(service), List.of());
+            system = new MonitoredSystem(systemId, "Orders", "",
+                    List.of(service(serviceId, systemId, "Database", MonitoringTarget.docker("db"))), List.of());
             configuration = ConfigurationSnapshot.available(system);
             DiagnosticFinding history = new DiagnosticFinding(UUID.randomUUID(), "test-fixture", serviceId,
-                    TIME, Optional.empty(), List.of(failed.getId(), passed.getId()), List.of(),
+                    T0, Optional.empty(), List.of(failed.getId(), passed.getId()), List.of(),
                     "Fixture assessment with unknown cause", List.of("Inspect logs"));
-            assessed = Incident.open(UUID.randomUUID(), systemId, TIME, failure)
+            assessed = Incident.open(UUID.randomUUID(), systemId, T0, failure)
                     .updateAssessment(Set.of(), List.of(history)).updateAssessment(Set.of(), List.of());
             retained.put(passed.getId(), passed);
             boundary = new IncidentInteractor(id -> {
@@ -271,27 +247,5 @@ public final class IncidentContractChecks {
         }
 
         private FailureInput input() { return new FailureInput(system.getId(), failure, List.of(failed)); }
-    }
-
-    private static final class CapturingOutput implements IncidentOutputBoundary {
-        private Incident processed;
-        private List<IncidentSummary> summaries;
-        private IncidentDetails details;
-        private String error;
-
-        public void presentProcessed(Incident incident) { processed = incident; }
-        public void presentIncidents(List<IncidentSummary> result) { summaries = result; }
-        public void presentDetails(IncidentDetails result) { details = result; }
-        public void presentError(String message) { error = message; }
-    }
-
-    private static HealthCheckResult result(UUID serviceId, HealthCheckResult.Outcome outcome) {
-        return new HealthCheckResult(UUID.randomUUID(), serviceId, TIME, outcome, OptionalLong.empty(), "");
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
     }
 }

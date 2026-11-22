@@ -4,15 +4,20 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 
+import static support.Checks.check;
+import static support.Checks.expect;
+import static support.TestData.T0;
+import static support.TestData.healthy;
+import static support.TestData.observation;
+
 /** Run directly with Java to check the persisted incident contract. */
 public final class IncidentRestoreChecks {
-    private static final Instant OPENED = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Instant OPENED = T0;
     private static final UUID SERVICE = UUID.randomUUID();
-    private static final HealthCheckResult FAILED = result(SERVICE, OPENED.minusSeconds(2),
+    private static final HealthCheckResult FAILED = observation(SERVICE, OPENED.minusSeconds(2),
             HealthCheckResult.Outcome.FAIL);
     private static final FailureEvent FAILURE = new FailureEvent(UUID.randomUUID(), SERVICE,
             FAILED.getTimestamp(), List.of(FAILED));
@@ -22,6 +27,7 @@ public final class IncidentRestoreChecks {
         restoresOptionalAndEqualTimestamps();
         rejectsOutOfOrderTimestamps();
         rejectsInvalidFailuresAndFindings();
+        System.out.println("UC3 incident restore checks passed");
     }
 
     private static void restoresResolvedIncidentWithHistoryAndEvidence() {
@@ -77,7 +83,7 @@ public final class IncidentRestoreChecks {
     private static void rejectsInvalidFailuresAndFindings() {
         rejects(() -> restore(OPENED, null, List.of(), List.of(), List.of(), List.of()), "empty failure list");
         FailureEvent late = new FailureEvent(UUID.randomUUID(), SERVICE, OPENED.plusSeconds(1),
-                List.of(result(SERVICE, OPENED.plusSeconds(1), HealthCheckResult.Outcome.FAIL)));
+                List.of(observation(SERVICE, OPENED.plusSeconds(1), HealthCheckResult.Outcome.FAIL)));
         rejects(() -> restore(OPENED, null, List.of(late), List.of(), List.of(), List.of()),
                 "first failure after opening");
         rejects(() -> restore(OPENED, null, List.of(FAILURE, FAILURE), List.of(), List.of(), List.of()),
@@ -90,7 +96,7 @@ public final class IncidentRestoreChecks {
         rejects(() -> restore(OPENED, OPENED, List.of(FAILURE), List.of(), List.of(), List.of()),
                 "resolved incident without evidence");
         rejects(() -> restore(OPENED, null, List.of(FAILURE), List.of(), List.of(),
-                List.of(result(SERVICE, OPENED, HealthCheckResult.Outcome.PASS))), "evidence without resolution");
+                List.of(observation(SERVICE, OPENED, HealthCheckResult.Outcome.PASS))), "evidence without resolution");
     }
 
     private static Incident restore(Instant opened, Instant resolved, List<FailureEvent> failures,
@@ -102,7 +108,7 @@ public final class IncidentRestoreChecks {
 
     private static Incident restoreTimeline(Instant investigating, Instant resolved) {
         List<HealthCheckResult> evidence = resolved == null ? List.of()
-                : List.of(result(SERVICE, resolved, HealthCheckResult.Outcome.PASS));
+                : List.of(observation(SERVICE, resolved, HealthCheckResult.Outcome.PASS));
         return Incident.restore(UUID.randomUUID(), UUID.randomUUID(), OPENED, investigating, resolved,
                 List.of(FAILURE), Set.of(), List.of(), List.of(), evidence);
     }
@@ -112,26 +118,7 @@ public final class IncidentRestoreChecks {
                 List.of(FAILED.getId()), List.of(), "Health check failed", List.of("Inspect the service"));
     }
 
-    private static ServiceHealth healthy(UUID service, Instant timestamp) {
-        return ServiceHealth.evaluated(HealthStatus.HEALTHY, result(service, timestamp, HealthCheckResult.Outcome.PASS));
-    }
-
-    private static HealthCheckResult result(UUID service, Instant timestamp, HealthCheckResult.Outcome outcome) {
-        return new HealthCheckResult(UUID.randomUUID(), service, timestamp, outcome, OptionalLong.empty(), "");
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
-    }
-
     private static void rejects(Runnable action, String invalidState) {
-        try {
-            action.run();
-        } catch (IllegalArgumentException expected) {
-            return;
-        }
-        throw new AssertionError("Accepted " + invalidState);
+        expect(IllegalArgumentException.class, action, "restore accepted " + invalidState);
     }
 }

@@ -1,11 +1,7 @@
 package use_case.investigate_incident;
 
-import entity.FailureEvent;
-import entity.HealthCheckResult;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -13,10 +9,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static support.Checks.check;
+import static support.TestData.T0;
+import static support.TestData.failure;
+
 /** Run explicitly after mvn test-compile, following the existing test convention. */
 public final class SerializedIncidentChecks {
-    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
-
     public static void main(String[] args) throws Exception {
         runsMonitoringAndUiCallsOneAtATime();
         returnsRetryableWhenInterruptedOrClosed();
@@ -103,17 +101,7 @@ public final class SerializedIncidentChecks {
     }
 
     private static FailureInput input() {
-        UUID service = UUID.randomUUID();
-        HealthCheckResult failed = new HealthCheckResult(UUID.randomUUID(), service, START,
-                HealthCheckResult.Outcome.FAIL, OptionalLong.empty(), "");
-        return new FailureInput(UUID.randomUUID(), new FailureEvent(UUID.randomUUID(), service, START,
-                List.of(failed)), List.of());
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
+        return new FailureInput(UUID.randomUUID(), failure(UUID.randomUUID(), T0), List.of());
     }
 
     private static final class CountingBoundary implements IncidentInputBoundary {

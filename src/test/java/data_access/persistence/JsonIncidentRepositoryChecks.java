@@ -6,9 +6,7 @@ import entity.Dependency;
 import entity.DiagnosticFinding;
 import entity.FailureEvent;
 import entity.HealthCheckResult;
-import entity.HealthStatus;
 import entity.Incident;
-import entity.ServiceHealth;
 import use_case.shared.IncidentDataException;
 
 import java.io.IOException;
@@ -26,6 +24,10 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static support.Checks.check;
+import static support.Checks.expect;
+import static support.TestData.healthy;
+
 /** Run directly with Java, using isolated files under the project's build directory. */
 public final class JsonIncidentRepositoryChecks {
     private static final Instant OPENED = Instant.parse("2026-01-01T00:00:00.123456789Z");
@@ -39,6 +41,8 @@ public final class JsonIncidentRepositoryChecks {
             filtersAndReplacesIncidents(root.resolve("filter"));
             reportsCorruptFiles(root.resolve("corrupt"));
             failedSavePreservesPreviousVersion(root.resolve("failed-save"));
+            sharesConfigurationDependencyFormat();
+            preservesOptionalResponseTime();
         } finally {
             List<Path> created;
             try (Stream<Path> paths = Files.walk(root)) {
@@ -48,6 +52,7 @@ public final class JsonIncidentRepositoryChecks {
                 Files.delete(path);
             }
         }
+        System.out.println("UC3 JSON incident repository checks passed");
     }
 
     private static void fullIncidentSurvivesReload(Path directory) {
@@ -173,11 +178,6 @@ public final class JsonIncidentRepositoryChecks {
         return new FailureEvent(UUID.randomUUID(), serviceId, at, List.of(failed));
     }
 
-    private static ServiceHealth healthy(UUID serviceId, Instant at) {
-        return ServiceHealth.evaluated(HealthStatus.HEALTHY, new HealthCheckResult(UUID.randomUUID(), serviceId,
-                at, HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "Recovered"));
-    }
-
     private static void checkObservations(List<HealthCheckResult> original, List<HealthCheckResult> restored) {
         check(original.size() == restored.size(), "Observation count changed");
         for (int i = 0; i < original.size(); i++) {
@@ -209,18 +209,40 @@ public final class JsonIncidentRepositoryChecks {
         }
     }
 
-    private static void expectDataFailure(Runnable action) {
-        try {
-            action.run();
-        } catch (IncidentDataException expected) {
-            return;
-        }
-        throw new AssertionError("Expected IncidentDataException");
+    private static void sharesConfigurationDependencyFormat() {
+        Dependency edge = new Dependency(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        JsonObject stored = new JsonObject();
+        stored.addProperty("id", edge.getId().toString());
+        stored.addProperty("dependentServiceId", edge.getDependentServiceId().toString());
+        stored.addProperty("requiredServiceId", edge.getRequiredServiceId().toString());
+        check(JsonCodec.encodeDependency(edge).equals(stored), "Dependency format differs from UC1");
+
+        Dependency loaded = JsonCodec.readDependency(stored);
+        check(loaded.getId().equals(edge.getId()) && loaded.getDependentServiceId().equals(edge.getDependentServiceId())
+                && loaded.getRequiredServiceId().equals(edge.getRequiredServiceId()), "Dependency direction changed");
     }
 
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
+    private static void preservesOptionalResponseTime() {
+        long duration = 4_000_000_000L;
+        JsonObject timed = JsonCodec.encodeHealthCheckResult(timedObservation(OptionalLong.of(duration)));
+        check(timed.getAsJsonPrimitive("responseTimeMs").isNumber()
+                && JsonCodec.readHealthCheckResult(timed).getResponseTimeMs().orElseThrow() == duration,
+                "Response time must retain its full integer precision");
+
+        JsonObject untimed = JsonCodec.encodeHealthCheckResult(timedObservation(OptionalLong.empty()));
+        check(!untimed.has("responseTimeMs") && JsonCodec.readHealthCheckResult(untimed).getResponseTimeMs().isEmpty(),
+                "An absent response time must survive reloading");
+
+        timed.addProperty("responseTimeMs", 1.5);
+        expect(ArithmeticException.class, () -> JsonCodec.readHealthCheckResult(timed), "fractional response time");
+    }
+
+    private static HealthCheckResult timedObservation(OptionalLong responseTimeMs) {
+        return new HealthCheckResult(UUID.randomUUID(), UUID.randomUUID(), Instant.EPOCH,
+                HealthCheckResult.Outcome.PASS, responseTimeMs, "OK");
+    }
+
+    private static void expectDataFailure(Runnable action) {
+        expect(IncidentDataException.class, action, "storage problem was not reported");
     }
 }

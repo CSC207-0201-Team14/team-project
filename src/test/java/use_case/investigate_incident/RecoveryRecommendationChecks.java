@@ -1,30 +1,27 @@
 package use_case.investigate_incident;
 
 import entity.Dependency;
-import entity.FailureEvent;
-import entity.HealthCheckResult;
-import entity.HealthStatus;
 import entity.Incident;
 import entity.MonitoredSystem;
-import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
 import entity.RecoveryAction;
 import entity.Service;
-import entity.ServiceHealth;
 import java.net.URI;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static support.Checks.check;
+import static support.TestData.at;
+import static support.TestData.failure;
+import static support.TestData.healthy;
+import static support.TestData.service;
+
 /** Run explicitly after mvn test-compile, following the existing test convention. */
 public final class RecoveryRecommendationChecks {
-    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
     private static final RecoveryRecommendationProvider PROVIDER = new RecoveryRecommendationProvider();
 
     public static void main(String[] args) {
@@ -84,10 +81,7 @@ public final class RecoveryRecommendationChecks {
         check(PROVIDER.recommend(incident, other.configuration()).isEmpty(),
                 "Configuration from another system is ignored");
 
-        HealthCheckResult passed = new HealthCheckResult(UUID.randomUUID(), fixture.db, START.plusSeconds(20),
-                HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "");
-        Incident resolved = incident.resolve(START.plusSeconds(20), START.plusSeconds(15),
-                Map.of(fixture.db, ServiceHealth.evaluated(HealthStatus.HEALTHY, passed)));
+        Incident resolved = incident.resolve(at(20), at(15), Map.of(fixture.db, healthy(fixture.db, at(20))));
         check(PROVIDER.recommend(resolved, fixture.configuration()).isEmpty(), "Resolved incidents get no actions");
     }
 
@@ -101,12 +95,11 @@ public final class RecoveryRecommendationChecks {
 
         /** WEB -> API -> DB, optionally with DB -> API forming a cycle. */
         private Fixture(boolean dockerDb, boolean cycle) {
-            MonitoringPolicy policy = new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2);
             services = List.of(
-                    new Service(web, systemId, "Web", MonitoringTarget.docker("web-container"), policy),
-                    new Service(api, systemId, "API", MonitoringTarget.docker("api-container"), policy),
-                    new Service(db, systemId, "DB", dockerDb ? MonitoringTarget.docker("db-container")
-                            : MonitoringTarget.http(URI.create("http://db.local/health")), policy));
+                    service(web, systemId, "Web", MonitoringTarget.docker("web-container")),
+                    service(api, systemId, "API", MonitoringTarget.docker("api-container")),
+                    service(db, systemId, "DB", dockerDb ? MonitoringTarget.docker("db-container")
+                            : MonitoringTarget.http(URI.create("http://db.local/health"))));
             dependencies.add(new Dependency(UUID.randomUUID(), web, api));
             dependencies.add(new Dependency(UUID.randomUUID(), api, db));
             if (cycle) {
@@ -121,28 +114,15 @@ public final class RecoveryRecommendationChecks {
         private Incident incident(UUID... failing) {
             Incident incident = null;
             for (int index = 0; index < failing.length; index++) {
-                FailureEvent failure = failure(failing[index], index);
                 incident = incident == null
-                        ? Incident.open(UUID.randomUUID(), systemId, START.plusSeconds(10), failure)
-                        : incident.recordFailure(failure);
+                        ? Incident.open(UUID.randomUUID(), systemId, at(10), failure(failing[index], at(index)))
+                        : incident.recordFailure(failure(failing[index], at(index)));
             }
             return incident;
         }
     }
 
-    private static FailureEvent failure(UUID serviceId, int offset) {
-        HealthCheckResult failed = new HealthCheckResult(UUID.randomUUID(), serviceId, START.plusSeconds(offset),
-                HealthCheckResult.Outcome.FAIL, OptionalLong.empty(), "");
-        return new FailureEvent(UUID.randomUUID(), serviceId, START.plusSeconds(offset), List.of(failed));
-    }
-
     private static List<UUID> targets(List<RecoveryAction> actions) {
         return actions.stream().map(RecoveryAction::getTargetServiceId).collect(Collectors.toList());
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
     }
 }
