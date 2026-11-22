@@ -297,7 +297,7 @@ sequenceDiagram
         I->>RR: save(record.recordAttempt(attempt))
         I->>O: presentAttempt(RecoveryAttemptResult)
         opt attempt SUCCEEDED and saved
-            Note over I: Verification window starts; see next diagram
+            Note over I: Verification window starts (see next diagram)
         end
     end
 ```
