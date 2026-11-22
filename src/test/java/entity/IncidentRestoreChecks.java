@@ -37,10 +37,9 @@ public final class IncidentRestoreChecks {
                 .resolve(resolved, investigating, Map.of(SERVICE, healthy(SERVICE, resolved),
                         dependent, healthy(dependent, resolved)));
 
-        // A reader may decode the same persisted finding into two distinct Java objects.
         Incident restored = Incident.restore(original.getId(), original.getSystemId(), original.getOpenedAt(),
                 investigating, resolved, original.getFailures(), original.getPotentiallyAffectedServiceIds(),
-                List.of(finding(current.getId())), original.getFindingHistory(), original.getResolutionEvidence());
+                List.of(current.getId()), original.getFindingHistory(), original.getResolutionEvidence());
         check(restored.getId().equals(original.getId()) && restored.getSystemId().equals(original.getSystemId()),
                 "Restoration must retain the incident and system IDs");
         check(restored.getOpenedAt().equals(OPENED) && restored.getInvestigatingAt().equals(Optional.of(investigating))
@@ -76,14 +75,29 @@ public final class IncidentRestoreChecks {
     }
 
     private static void rejectsInvalidFailuresAndFindings() {
-        rejects(() -> Incident.restore(UUID.randomUUID(), UUID.randomUUID(), OPENED, null, null,
-                List.of(), Set.of(), List.of(), List.of(), List.of()), "empty failure list");
-        DiagnosticFinding missing = finding(UUID.randomUUID());
+        rejects(() -> restore(OPENED, null, List.of(), List.of(), List.of(), List.of()), "empty failure list");
+        FailureEvent late = new FailureEvent(UUID.randomUUID(), SERVICE, OPENED.plusSeconds(1),
+                List.of(result(SERVICE, OPENED.plusSeconds(1), HealthCheckResult.Outcome.FAIL)));
+        rejects(() -> restore(OPENED, null, List.of(late), List.of(), List.of(), List.of()),
+                "first failure after opening");
+        rejects(() -> restore(OPENED, null, List.of(FAILURE, FAILURE), List.of(), List.of(), List.of()),
+                "duplicate failure ID");
         DiagnosticFinding known = finding(UUID.randomUUID());
-        rejects(() -> Incident.restore(UUID.randomUUID(), UUID.randomUUID(), OPENED, null, null, List.of(FAILURE),
-                Set.of(), List.of(known, missing), List.of(known), List.of()), "active finding absent from history");
-        rejects(() -> Incident.restore(UUID.randomUUID(), UUID.randomUUID(), OPENED, null, null, List.of(FAILURE),
-                Set.of(), List.of(known), List.of(known, finding(known.getId())), List.of()), "duplicate history ID");
+        rejects(() -> restore(OPENED, null, List.of(FAILURE), List.of(known.getId(), UUID.randomUUID()),
+                List.of(known), List.of()), "active finding absent from history");
+        rejects(() -> restore(OPENED, null, List.of(FAILURE), List.of(known.getId()),
+                List.of(known, finding(known.getId())), List.of()), "duplicate history ID");
+        rejects(() -> restore(OPENED, OPENED, List.of(FAILURE), List.of(), List.of(), List.of()),
+                "resolved incident without evidence");
+        rejects(() -> restore(OPENED, null, List.of(FAILURE), List.of(), List.of(),
+                List.of(result(SERVICE, OPENED, HealthCheckResult.Outcome.PASS))), "evidence without resolution");
+    }
+
+    private static Incident restore(Instant opened, Instant resolved, List<FailureEvent> failures,
+                                    List<UUID> activeIds, List<DiagnosticFinding> history,
+                                    List<HealthCheckResult> evidence) {
+        return Incident.restore(UUID.randomUUID(), UUID.randomUUID(), opened, null, resolved, failures, Set.of(),
+                activeIds, history, evidence);
     }
 
     private static Incident restoreTimeline(Instant investigating, Instant resolved) {

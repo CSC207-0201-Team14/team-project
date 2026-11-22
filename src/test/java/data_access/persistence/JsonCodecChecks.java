@@ -1,7 +1,6 @@
-package data_access;
+package data_access.persistence;
 
 import com.google.gson.JsonObject;
-import data_access.persistence.JsonCodec;
 import entity.Dependency;
 import entity.HealthCheckResult;
 

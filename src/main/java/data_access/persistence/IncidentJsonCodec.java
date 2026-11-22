@@ -7,10 +7,6 @@ import entity.DiagnosticFinding;
 import entity.Incident;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -51,23 +47,12 @@ final class IncidentJsonCodec {
         if (version != SCHEMA_VERSION) {
             throw new IllegalArgumentException("Unsupported incident schema version: " + version);
         }
-        List<DiagnosticFinding> history = readList(json, "findingHistory", IncidentJsonCodec::readFinding);
-        Map<UUID, DiagnosticFinding> byId = new HashMap<>();
-        for (DiagnosticFinding finding : history) {
-            byId.put(finding.getId(), finding);
-        }
-        List<DiagnosticFinding> active = new ArrayList<>();
-        for (UUID id : readList(json, "activeFindingIds", JsonCodec::readId)) {
-            DiagnosticFinding finding = byId.get(id);
-            if (finding == null) {
-                throw new IllegalArgumentException("Active finding is missing from history: " + id);
-            }
-            active.add(finding);
-        }
         return Incident.restore(readId(json, "id"), readId(json, "systemId"), readInstant(json, "openedAt"),
                 readOptionalTime(json, "investigatingAt"), readOptionalTime(json, "resolvedAt"),
                 readList(json, "failures", JsonCodec::readFailureEvent),
-                Set.copyOf(readList(json, "potentiallyAffectedServiceIds", JsonCodec::readId)), active, history,
+                Set.copyOf(readList(json, "potentiallyAffectedServiceIds", JsonCodec::readId)),
+                readList(json, "activeFindingIds", JsonCodec::readId),
+                readList(json, "findingHistory", IncidentJsonCodec::readFinding),
                 readList(json, "resolutionEvidence", JsonCodec::readHealthCheckResult));
     }
 

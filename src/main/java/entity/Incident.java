@@ -56,11 +56,11 @@ public final class Incident {
     /**
      * Rebuilds a saved incident with its original finding history and resolution evidence.
      * A null transition time means that transition was skipped or has not happened.
-     * Active findings reference history entries by ID and retain their supplied order.
+     * Active findings are identified by their history IDs and keep the supplied order.
      */
     public static Incident restore(UUID id, UUID systemId, Instant openedAt, Instant investigatingAt,
                                    Instant resolvedAt, List<FailureEvent> failures,
-                                   Set<UUID> potentiallyAffectedServiceIds, List<DiagnosticFinding> activeFindings,
+                                   Set<UUID> potentiallyAffectedServiceIds, List<UUID> activeFindingIds,
                                    List<DiagnosticFinding> findingHistory, List<HealthCheckResult> resolutionEvidence) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(systemId, "systemId");
@@ -72,8 +72,17 @@ public final class Incident {
         if (resolvedAt != null && resolvedAt.isBefore(lastUnresolvedAt)) {
             throw new IllegalArgumentException("Resolution timestamps are out of order");
         }
+        if ((resolvedAt == null) != resolutionEvidence.isEmpty()) {
+            throw new IllegalArgumentException("Only a resolved incident has resolution evidence");
+        }
         if (failures.isEmpty()) {
             throw new IllegalArgumentException("An incident requires at least one failure");
+        }
+        if (failures.get(0).getTimestamp().isAfter(openedAt)) {
+            throw new IllegalArgumentException("The first failure must occur by the time the incident opens");
+        }
+        if (failures.stream().map(FailureEvent::getId).distinct().count() != failures.size()) {
+            throw new IllegalArgumentException("Failures must have unique event IDs");
         }
 
         Map<UUID, DiagnosticFinding> historyById = new HashMap<>();
@@ -82,16 +91,16 @@ public final class Incident {
                 throw new IllegalArgumentException("Finding history must contain unique finding IDs");
             }
         }
-        List<DiagnosticFinding> restoredActiveFindings = new ArrayList<>();
-        for (DiagnosticFinding active : activeFindings) {
-            DiagnosticFinding finding = historyById.get(active.getId());
+        List<DiagnosticFinding> activeFindings = new ArrayList<>();
+        for (UUID activeId : activeFindingIds) {
+            DiagnosticFinding finding = historyById.get(activeId);
             if (finding == null) {
-                throw new IllegalArgumentException("Active finding is missing from history: " + active.getId());
+                throw new IllegalArgumentException("Active finding is missing from history: " + activeId);
             }
-            restoredActiveFindings.add(finding);
+            activeFindings.add(finding);
         }
         return new Incident(id, systemId, openedAt, investigatingAt, resolvedAt, failures, potentiallyAffectedServiceIds,
-                restoredActiveFindings, findingHistory, resolutionEvidence);
+                activeFindings, findingHistory, resolutionEvidence);
     }
 
     public Incident startInvestigation(Instant timestamp) {
