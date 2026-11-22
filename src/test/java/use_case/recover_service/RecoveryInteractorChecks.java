@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,8 @@ import java.util.stream.Collectors;
 import use_case.investigate_incident.ConfigurationReader;
 import use_case.investigate_incident.ConfigurationSnapshot;
 import use_case.investigate_incident.RecoveryRecommendationProvider;
+import use_case.monitor_service_health.ObservationStore;
+import use_case.monitor_service_health.ObservationStoreException;
 import use_case.shared.IncidentDataException;
 import use_case.shared.IncidentRepository;
 
@@ -269,10 +272,12 @@ public final class RecoveryInteractorChecks {
 
         Fixture observing = new Fixture();
         observing.confirm();
-        observing.observations.failure = new IncidentDataException("Observations are unavailable");
+        observing.observations.failure = new ObservationStoreException("disk unreadable", null);
         observing.interactor.verifyResolution(observing.incident.getId());
-        check(observing.output.errors.equals(List.of("Observations are unavailable")),
-                "Observation access errors are presented");
+        check(observing.output.errors.equals(List.of("Observations could not be read: disk unreadable")),
+                "Observation store errors are presented");
+        check(observing.storedIncident().getStatus() != Incident.Status.RESOLVED,
+                "The incident stays unresolved when observations cannot be read");
     }
 
     private static void manualVerificationResolvesTheIncident() {
@@ -467,9 +472,10 @@ public final class RecoveryInteractorChecks {
         }
     }
 
-    private static final class FakeObservations implements RecoveryObservationReader {
+    /** In-memory UC2 store: full history per service, oldest first, as ObservationStore documents. */
+    private static final class FakeObservations implements ObservationStore {
         final List<HealthCheckResult> results = new ArrayList<>();
-        IncidentDataException failure;
+        ObservationStoreException failure;
 
         void add(Service service, Instant at, HealthCheckResult.Outcome outcome) {
             results.add(new HealthCheckResult(UUID.randomUUID(), service.getId(), at, outcome,
@@ -483,12 +489,18 @@ public final class RecoveryInteractorChecks {
         }
 
         @Override
-        public List<HealthCheckResult> findByServiceSince(UUID serviceId, Instant since) {
+        public void save(HealthCheckResult result) {
+            results.add(result);
+        }
+
+        @Override
+        public List<HealthCheckResult> findByServiceId(UUID serviceId) {
             if (failure != null) {
                 throw failure;
             }
-            return results.stream().filter(result -> result.getServiceId().equals(serviceId)
-                    && !result.getTimestamp().isBefore(since)).collect(Collectors.toList());
+            return results.stream().filter(result -> result.getServiceId().equals(serviceId))
+                    .sorted(Comparator.comparing(HealthCheckResult::getTimestamp))
+                    .collect(Collectors.toList());
         }
     }
 

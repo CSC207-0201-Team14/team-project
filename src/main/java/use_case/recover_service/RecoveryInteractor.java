@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 import use_case.investigate_incident.ConfigurationReader;
 import use_case.investigate_incident.ConfigurationSnapshot;
 import use_case.investigate_incident.RecoveryRecommendationProvider;
+import use_case.monitor_service_health.ObservationStore;
+import use_case.monitor_service_health.ObservationStoreException;
 import use_case.shared.IncidentDataException;
 import use_case.shared.IncidentRepository;
 
@@ -30,6 +32,8 @@ import use_case.shared.IncidentRepository;
  * Executes confirmed container recovery for an incident and resolves it once fresh checks verify recovery.
  * Coordinates ports only: operation choice lives in ContainerRecoveryPolicy and threshold evaluation in
  * RecoveryVerifier. Actions are re-derived from UC3's current recommendations before anything runs.
+ * Observations come from UC2's ObservationStore, which monitoring keeps writing while recovery is verified;
+ * UC4 only reads from it.
  */
 public final class RecoveryInteractor implements RecoveryInputBoundary {
     private final IncidentRepository incidents;
@@ -38,7 +42,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
     private final ContainerStateReader containerStates;
     private final ContainerOperator containers;
     private final RecoveryRecordRepository records;
-    private final RecoveryObservationReader observations;
+    private final ObservationStore observations;
     private final ContainerRecoveryPolicy policy;
     private final RecoveryVerifier verifier;
     private final Clock clock;
@@ -48,7 +52,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
     public RecoveryInteractor(IncidentRepository incidents, ConfigurationReader configurations,
                               RecoveryRecommendationProvider recommendations, ContainerStateReader containerStates,
                               ContainerOperator containers, RecoveryRecordRepository records,
-                              RecoveryObservationReader observations, ContainerRecoveryPolicy policy,
+                              ObservationStore observations, ContainerRecoveryPolicy policy,
                               RecoveryVerifier verifier, Clock clock, Supplier<UUID> attemptIds,
                               RecoveryOutputBoundary output) {
         this.incidents = Objects.requireNonNull(incidents, "incidents");
@@ -201,7 +205,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
         Map<UUID, List<HealthCheckResult>> fresh = new HashMap<>();
         for (UUID serviceId : incident.getRecoveryRequiredServiceIds()) {
             if (services.containsKey(serviceId)) {
-                fresh.put(serviceId, observations.findByServiceSince(serviceId, windowStart.get()));
+                fresh.put(serviceId, history(serviceId));
             }
         }
         Instant now = clock.instant();
@@ -219,6 +223,18 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
         }
         incidents.save(resolved);
         output.presentResolved(new ResolutionResult(resolved, record.get().getAttempts(), result));
+    }
+
+    /**
+     * The service's full observation history, oldest first. RecoveryVerifier selects the checks inside its
+     * window, so no filtering happens here. Storage failures become IncidentDataException, like other data access.
+     */
+    private List<HealthCheckResult> history(UUID serviceId) {
+        try {
+            return observations.findByServiceId(serviceId);
+        } catch (ObservationStoreException exception) {
+            throw new IncidentDataException("Observations could not be read: " + exception.getMessage(), exception);
+        }
     }
 
     /** Saves the attempt and presents it. Returns false if the attempt could not be saved. */
