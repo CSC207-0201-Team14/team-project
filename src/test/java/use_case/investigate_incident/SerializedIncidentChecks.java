@@ -1,15 +1,19 @@
 package use_case.investigate_incident;
 
+import infrastructure.scheduling.SingleThreadIncidentWorker;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static support.Checks.check;
+import static support.Checks.expect;
 import static support.TestData.T0;
 import static support.TestData.failure;
 
@@ -19,6 +23,7 @@ public final class SerializedIncidentChecks {
         runsMonitoringAndUiCallsOneAtATime();
         returnsRetryableWhenInterruptedOrClosed();
         allowsNestedCallsFromTheWorker();
+        sharesWorkerWithRecoveryOperations();
         System.out.println("UC3 serialized boundary checks passed");
     }
 
@@ -36,7 +41,8 @@ public final class SerializedIncidentChecks {
             }
             return FailureProcessingResult.PROCESSED;
         });
-        try (SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner)) {
+        try (SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker()) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
             List<Thread> callers = new ArrayList<>();
             List<FailureProcessingResult> results = new ArrayList<>();
             for (int i = 0; i < 4; i++) {
@@ -75,17 +81,20 @@ public final class SerializedIncidentChecks {
 
     private static void returnsRetryableWhenInterruptedOrClosed() {
         CountingBoundary inner = new CountingBoundary(input -> FailureProcessingResult.PROCESSED);
-        SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner);
+        SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker();
+        SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
+        check(!AutoCloseable.class.isAssignableFrom(SerializedIncidentInputBoundary.class),
+                "Only the worker's owner can shut the worker down");
         Thread.currentThread().interrupt();
         FailureProcessingResult interrupted = boundary.processFailure(input());
         check(interrupted == FailureProcessingResult.RETRYABLE && Thread.interrupted(),
                 "An interrupted caller keeps the event and its interrupt flag");
-        boundary.close();
+        worker.close();
         check(boundary.processFailure(input()) == FailureProcessingResult.RETRYABLE,
-                "A closed boundary asks the caller to redeliver");
+                "A closed worker makes the boundary ask the caller to redeliver");
         boundary.openIncident(UUID.randomUUID());
         boundary.listIncidents(UUID.randomUUID());
-        check(inner.uiRequests.isEmpty(), "A closed boundary ignores new UI requests");
+        check(inner.uiRequests.isEmpty(), "A closed worker ignores new UI requests");
     }
 
     private static void allowsNestedCallsFromTheWorker() {
@@ -93,11 +102,38 @@ public final class SerializedIncidentChecks {
         AtomicInteger depth = new AtomicInteger();
         CountingBoundary inner = new CountingBoundary(input -> depth.incrementAndGet() == 1
                 ? outer.get().processFailure(input) : FailureProcessingResult.PROCESSED);
-        try (SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner)) {
+        try (SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker()) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
             outer.set(boundary);
             check(boundary.processFailure(input()) == FailureProcessingResult.PROCESSED,
                     "A call made from the worker runs directly instead of deadlocking");
         }
+    }
+
+    private static void sharesWorkerWithRecoveryOperations() throws Exception {
+        SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker();
+        AtomicReference<Thread> processingThread = new AtomicReference<>();
+        CountingBoundary inner = new CountingBoundary(input -> {
+            processingThread.set(Thread.currentThread());
+            return FailureProcessingResult.PROCESSED;
+        });
+        UUID incidentId = UUID.randomUUID();
+        FutureTask<Thread> recoveryOperation = new FutureTask<>(Thread::currentThread);
+        try (worker) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
+            FutureTask<FailureProcessingResult> firstOperation = new FutureTask<>(() -> boundary.processFailure(input()));
+            worker.execute(firstOperation);
+            check(firstOperation.get(5, TimeUnit.SECONDS) == FailureProcessingResult.PROCESSED,
+                    "The first operation submitted by another use case can call UC3 on the shared worker");
+            boundary.openIncident(incidentId);
+            worker.execute(recoveryOperation);
+        }
+        Thread recoveryThread = recoveryOperation.get(5, TimeUnit.SECONDS);
+        check(inner.uiRequests.equals(List.of("open " + incidentId))
+                        && inner.uiThreads.equals(List.of(recoveryThread)) && processingThread.get() == recoveryThread,
+                "Closing the shared worker drains queued investigation and recovery operations on one thread");
+        expect(RejectedExecutionException.class, () -> worker.execute(recoveryOperation),
+                "The closed shared worker rejects later incident operations");
     }
 
     private static FailureInput input() {
