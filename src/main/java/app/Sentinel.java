@@ -7,7 +7,12 @@ import interface_adapter.configuration.ConfigurationController;
 import interface_adapter.configuration.ConfigurationPresenter;
 import interface_adapter.investigate_incident.ConfigurationRepositoryReader;
 import interface_adapter.investigate_incident.IncidentFailureConnector;
+import interface_adapter.investigate_incident.IncidentPresenter;
+import interface_adapter.investigate_incident.IncidentViewModel;
+import interface_adapter.investigate_incident.InvestigateIncidentController;
 import interface_adapter.investigate_incident.ObservationLookupReader;
+import entity.HealthCheckResult;
+import entity.MonitoredSystem;
 import use_case.configure_monitored_system.ConfigurationInteractor;
 import use_case.configure_monitored_system.ConfigurationRepository;
 import use_case.investigate_incident.DependencyFailureRule;
@@ -26,15 +31,19 @@ import use_case.monitor_service_health.ObservationLookup;
 import use_case.monitor_service_health.ObservationStore;
 import use_case.shared.IncidentRepository;
 import view.ConfigurationView;
+import view.IncidentView;
+import view.PlaceholderPanel;
+import view.SentinelWindow;
 
 import javax.swing.SwingUtilities;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -60,18 +69,57 @@ public final class Sentinel implements AutoCloseable {
 
     private void open() {
         ExecutorService configurationWorker = Executors.newSingleThreadExecutor();
-        ConfigurationView view = new ConfigurationView();
-        ConfigurationInteractor interactor = new ConfigurationInteractor(
-                configurations, new ConfigurationPresenter(view));
-        view.addWindowListener(new WindowAdapter() {
+        ConfigurationView configurationView = new ConfigurationView();
+
+        IncidentViewModel incidentViewModel = new IncidentViewModel();
+        IncidentView incidentView = new IncidentView(incidentViewModel);
+        // UC2's observation store is not part of main yet, so nothing creates incidents in the desktop app and
+        // evidence outside each failure event is reported as unavailable rather than invented.
+        IncidentInvestigation investigation = wireInvestigateIncident(MonitoringNotConnected.INSTANCE,
+                MonitoringNotConnected.INSTANCE, new IncidentPresenter(incidentViewModel));
+        incidentView.connect(new InvestigateIncidentController(investigation.getInvestigation()));
+
+        ConfigurationInteractor configuration = new ConfigurationInteractor(configurations,
+                new ConfigurationPresenter(sharedSystemList(configurationView, incidentView)));
+
+        SentinelWindow window = new SentinelWindow(configurationView,
+                new PlaceholderPanel("Monitor service health"), incidentView,
+                new PlaceholderPanel("Recover a service and verify resolution"),
+                configurationView::confirmClose,
+                () -> {
+                    configurationWorker.shutdown();
+                    close();
+                });
+        configurationView.connect(new ConfigurationController(configuration, configurationWorker));
+        window.setVisible(true);
+    }
+
+    /**
+     * UC1 stays the source of the system list: its presenter output also refreshes the incident panel's
+     * system picker, so UC3 does not need its own query for configured systems.
+     */
+    private static ConfigurationPresenter.View sharedSystemList(ConfigurationView configurationView,
+                                                                IncidentView incidentView) {
+        return new ConfigurationPresenter.View() {
             @Override
-            public void windowClosed(WindowEvent event) {
-                configurationWorker.shutdown();
-                close();
+            public void showSystems(List<MonitoredSystem> systems, List<String> skippedFiles) {
+                configurationView.showSystems(systems, skippedFiles);
+                Map<UUID, String> names = new LinkedHashMap<>();
+                systems.forEach(system -> names.put(system.getId(), system.getName()));
+                incidentView.showSystems(names);
             }
-        });
-        view.connect(new ConfigurationController(interactor, configurationWorker));
-        view.setVisible(true);
+
+            @Override
+            public void showSaved(MonitoredSystem system) {
+                configurationView.showSaved(system);
+                incidentView.showSavedSystem(system.getId(), system.getName());
+            }
+
+            @Override
+            public void showError(String message) {
+                configurationView.showError(message);
+            }
+        };
     }
 
     /**
@@ -97,6 +145,29 @@ public final class Sentinel implements AutoCloseable {
     @Override
     public void close() {
         incidentWorker.close();
+    }
+
+    /**
+     * Stands in for UC2's observation store until its outer layers are wired: no history, so the incident
+     * panel lists stored incidents and marks evidence it cannot load as unavailable.
+     */
+    private enum MonitoringNotConnected implements ObservationStore, ObservationLookup {
+        INSTANCE;
+
+        @Override
+        public void save(HealthCheckResult result) {
+            throw new UnsupportedOperationException("Monitoring is not connected in this version");
+        }
+
+        @Override
+        public List<HealthCheckResult> findByServiceId(UUID serviceId) {
+            return List.of();
+        }
+
+        @Override
+        public Map<UUID, HealthCheckResult> findByIds(Set<UUID> allowedServiceIds, Set<UUID> observationIds) {
+            return Map.of();
+        }
     }
 
     /** UC3's entry points: the failure listener for UC2's wiring and the input boundary for the incident UI. */
