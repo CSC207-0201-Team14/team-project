@@ -73,6 +73,17 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 **Success outcome:** A valid monitored system, its services, and their dependencies are saved and available for monitoring.
 
+### Run the configuration editor
+
+Run `mvn compile exec:java -Dexec.mainClass=app.Sentinel` from the repository root with a graphical session.
+Create a system or select a saved one, add or edit HTTP and Docker services, and use the System Map to specify which services depend on others.
+Removing a service from the draft also removes its dependency edges. Save the configuration to commit the changes.
+Configurations are stored under `~/.sentinel/systems` and can be reopened after restarting Sentinel.
+
+Run the UC1 checks with `mvn test-compile` followed by
+`mvn exec:java -Dexec.classpathScope=test -Dexec.mainClass=use_case.configure_monitored_system.ConfigurationInteractorChecks`
+and `mvn exec:java -Dexec.classpathScope=test -Dexec.mainClass=data_access.configuration.JsonConfigurationRepositoryChecks`.
+
 ### Use Case 2
 
 **Name:** Monitor Service Health

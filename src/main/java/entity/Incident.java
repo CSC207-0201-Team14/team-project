@@ -2,6 +2,7 @@ package entity;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -156,14 +157,8 @@ public final class Incident {
             throw new IllegalArgumentException("Resolution timestamps are out of order");
         }
 
-        Set<UUID> requiredServices = new TreeSet<>(getFailingServiceIds());
-        requiredServices.addAll(potentiallyAffectedServiceIds);
-        for (DiagnosticFinding finding : activeFindings) {
-            finding.getSuspectedCauseServiceId().ifPresent(requiredServices::add);
-        }
-
         List<HealthCheckResult> evidence = new ArrayList<>();
-        for (UUID serviceId : requiredServices) {
+        for (UUID serviceId : getRecoveryRequiredServiceIds()) {
             ServiceHealth health = healthByService.get(serviceId);
             if (health == null || !serviceId.equals(health.getServiceId()) || health.getStatus() != HealthStatus.HEALTHY) {
                 throw new IllegalStateException("Recovery has not been verified for service " + serviceId);
@@ -180,6 +175,19 @@ public final class Incident {
         }
         return new Incident(id, systemId, openedAt, investigatingAt, timestamp, failures, potentiallyAffectedServiceIds,
                 activeFindings, findingHistory, evidence);
+    }
+
+    /**
+     * Services that need fresh passing checks before resolve accepts the incident: services with
+     * recorded failures, services potentially affected in the current assessment, and active suspected causes.
+     */
+    public Set<UUID> getRecoveryRequiredServiceIds() {
+        Set<UUID> requiredServices = new TreeSet<>(getFailingServiceIds());
+        requiredServices.addAll(potentiallyAffectedServiceIds);
+        for (DiagnosticFinding finding : activeFindings) {
+            finding.getSuspectedCauseServiceId().ifPresent(requiredServices::add);
+        }
+        return Collections.unmodifiableSet(requiredServices);
     }
 
     private void requireUnresolved() {
