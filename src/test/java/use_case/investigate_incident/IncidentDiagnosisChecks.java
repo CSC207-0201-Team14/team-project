@@ -34,6 +34,7 @@ public final class IncidentDiagnosisChecks {
         traversesCyclesAndRetainsAlternatives();
         correlatesConservatively();
         verifiesInteractorWithRealStrategies();
+        handlesRedeliveryAfterResolution();
         System.out.println("UC3 diagnosis checks passed");
     }
 
@@ -188,6 +189,26 @@ public final class IncidentDiagnosisChecks {
                 && output.processed.getId().equals(incidentId),
                 "Later correlated failures keep the incident under investigation");
         check(repository.findUnresolvedBySystemId(fixture.systemId).size() == 1, "Repeated delivery does not duplicate incidents");
+    }
+
+    private static void handlesRedeliveryAfterResolution() {
+        Fixture fixture = new Fixture();
+        InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
+        FailureEvent originalFailure = failure(fixture.db, 50);
+        Incident resolved = Incident.open(UUID.randomUUID(), fixture.systemId, at(50), originalFailure)
+                .resolve(at(70), at(60), Map.of(fixture.db, TestData.healthy(fixture.db, at(70))));
+        repository.save(resolved);
+        RecordingOutput output = new RecordingOutput();
+        IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                (services, ids) -> Map.of(), repository, fixture.assessment(),
+                new RecoveryRecommendationProvider(), CLOCK, output);
+        check(boundary.processFailure(fixture.input(originalFailure)) == FailureProcessingResult.PROCESSED
+                && output.processed == resolved && repository.findBySystemId(fixture.systemId).equals(List.of(resolved)),
+                "A replayed failure acknowledges the original resolved incident");
+        check(boundary.processFailure(fixture.input(failure(fixture.db, 95))) == FailureProcessingResult.PROCESSED
+                && output.processed.getStatus() == Incident.Status.OPEN && !output.processed.getId().equals(resolved.getId())
+                && repository.findBySystemId(fixture.systemId).size() == 2,
+                "A new failure on the recovered service opens its own incident");
     }
 
     private static final class Fixture {

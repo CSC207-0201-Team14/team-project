@@ -9,7 +9,7 @@ import java.io.Reader;
 import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
@@ -28,35 +28,44 @@ public final class JsonIncidentRepository implements IncidentRepository {
 
     @Override
     public Optional<Incident> findById(UUID incidentId) {
-        return readIfPresent(directory.resolve(Objects.requireNonNull(incidentId, "incidentId") + ".json"));
+        Path file = directory.resolve(Objects.requireNonNull(incidentId, "incidentId") + ".json");
+        return isMissing(file) ? Optional.empty() : Optional.of(read(file));
     }
 
     @Override
     public List<Incident> findBySystemId(UUID systemId) {
+        if (isMissing(directory)) {
+            return List.of();
+        }
         List<Incident> incidents = new ArrayList<>();
         try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, "*.json")) {
             for (Path file : files) {
-                readIfPresent(file).filter(incident -> incident.getSystemId().equals(systemId))
-                        .ifPresent(incidents::add);
+                Incident incident = read(file);
+                if (incident.getSystemId().equals(systemId)) {
+                    incidents.add(incident);
+                }
             }
-        } catch (NoSuchFileException exception) {
-            return List.of();
         } catch (IOException | DirectoryIteratorException | SecurityException exception) {
             throw new IncidentDataException("Could not read the incidents directory " + directory + ".", exception);
         }
         return List.copyOf(incidents);
     }
 
-    /** Empty only when the file does not exist; any other read or format problem is a data failure. */
-    private static Optional<Incident> readIfPresent(Path file) {
+    private static boolean isMissing(Path path) {
+        try {
+            return Files.notExists(path, LinkOption.NOFOLLOW_LINKS);
+        } catch (SecurityException exception) {
+            throw new IncidentDataException("Could not access " + path + ".", exception);
+        }
+    }
+
+    private static Incident read(Path file) {
         try (Reader reader = Files.newBufferedReader(file)) {
             Incident incident = IncidentJsonCodec.decode(JsonCodec.readObject(reader));
             if (!file.getFileName().toString().equals(incident.getId() + ".json")) {
                 throw new IllegalArgumentException("Incident ID does not match its filename");
             }
-            return Optional.of(incident);
-        } catch (NoSuchFileException exception) {
-            return Optional.empty();
+            return incident;
         } catch (IOException | RuntimeException exception) {
             throw new IncidentDataException("Could not read incident file " + file + ".", exception);
         }

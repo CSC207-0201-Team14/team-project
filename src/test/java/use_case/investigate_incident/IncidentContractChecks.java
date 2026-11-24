@@ -17,6 +17,7 @@ import use_case.shared.IncidentRepository;
 
 import static support.Checks.check;
 import static support.TestData.T0;
+import static support.TestData.failure;
 import static support.TestData.healthy;
 import static support.TestData.observation;
 import static support.TestData.service;
@@ -46,7 +47,6 @@ public final class IncidentContractChecks {
                 "Assessment must be saved before presenting success");
         check(fixture.boundary.processFailure(input) == FailureProcessingResult.PROCESSED,
                 "Redelivering the same event reports PROCESSED");
-        check(fixture.seenUnresolved.size() == 1, "Next call receives the saved unresolved incident");
 
         fixture.boundary.openIncident(fixture.assessed.getId());
         IncidentDetails details = fixture.output.details;
@@ -76,9 +76,11 @@ public final class IncidentContractChecks {
         check(fixture.output.details.getMissingObservationIds().equals(Set.of(fixture.passed.getId())),
                 "Missing historical evidence is explicit");
         fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(fixture.system, "Graph unavailable");
-        fixture.boundary.processFailure(input);
-        check(fixture.seenConfiguration.getDependencyUnavailableReason().isPresent(),
-                "Unavailable graph reaches the assessment distinctly from a known empty graph");
+        fixture.boundary.processFailure(new FailureInput(fixture.system.getId(),
+                failure(fixture.serviceId, T0.plusSeconds(4)), List.of()));
+        check(fixture.seenConfiguration.getDependencyUnavailableReason().isPresent()
+                && fixture.seenUnresolved.equals(List.of(investigating)),
+                "A new failure reaches assessment with the open investigation and unavailable graph");
     }
 
     private static void opensDetailsWithCurrentServiceNames() {
@@ -160,7 +162,6 @@ public final class IncidentContractChecks {
         IncidentRepository failingRepository = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { throw new IncidentDataException("Read failed"); }
             public List<Incident> findBySystemId(UUID id) { throw new IncidentDataException("List failed"); }
-            public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
@@ -168,8 +169,8 @@ public final class IncidentContractChecks {
                 new RecoveryRecommendationProvider(), CLOCK, fixture.output);
         check(boundary.processFailure(fixture.input()) == FailureProcessingResult.RETRYABLE,
                 "A storage failure is retryable");
-        check(fixture.output.error.equals("Save failed") && fixture.output.processed == null,
-                "Save failure is reported without publishing success");
+        check(fixture.output.error.equals("List failed") && fixture.output.processed == null,
+                "A history read failure is reported without publishing success");
 
         InMemoryIncidentRepository untouched = new InMemoryIncidentRepository();
         IncidentInputBoundary invalid = new IncidentInteractor(id -> Optional.of(fixture.configuration),
@@ -188,13 +189,23 @@ public final class IncidentContractChecks {
 
         IncidentRepository unsavable = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { return Optional.of(fixture.assessed); }
-            public List<Incident> findBySystemId(UUID id) { return List.of(); }
+            public List<Incident> findBySystemId(UUID id) { return List.of(fixture.assessed); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         fixture.output.error = null;
-        new IncidentInteractor(id -> Optional.of(fixture.configuration), (services, ids) -> Map.of(), unsavable,
+        IncidentInputBoundary failingSave = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                (services, ids) -> Map.of(), unsavable,
                 (input, configuration, unresolved) -> fixture.assessed, new RecoveryRecommendationProvider(),
-                CLOCK, fixture.output).openIncident(fixture.assessed.getId());
+                CLOCK, fixture.output);
+        FailureInput newFailure = new FailureInput(fixture.system.getId(), failure(fixture.serviceId, T0), List.of());
+        check(failingSave.processFailure(newFailure) == FailureProcessingResult.RETRYABLE
+                && "Save failed".equals(fixture.output.error) && fixture.output.processed == null,
+                "A failed save is retryable and does not publish success");
+        fixture.output.error = null;
+        check(failingSave.processFailure(fixture.input()) == FailureProcessingResult.PROCESSED
+                && fixture.output.processed == fixture.assessed && fixture.output.error == null,
+                "An already recorded delivery can be acknowledged without another save");
+        failingSave.openIncident(fixture.assessed.getId());
         check("Save failed".equals(fixture.output.error) && fixture.output.details == null,
                 "Failing to save the investigating status presents an error instead of details");
     }

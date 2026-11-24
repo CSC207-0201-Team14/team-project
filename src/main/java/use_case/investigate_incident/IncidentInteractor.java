@@ -57,14 +57,24 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                 output.presentError("Failure input references a service outside the monitored system");
                 return FailureProcessingResult.REJECTED;
             }
-            List<Incident> unresolved = incidents.findUnresolvedBySystemId(input.getSystemId());
-            try {
-                result = assessment.assess(input, configuration.get(), List.copyOf(unresolved));
-            } catch (IllegalArgumentException exception) {
-                output.presentError("Failure input could not be assessed: " + exception.getMessage());
-                return FailureProcessingResult.REJECTED;
+            List<Incident> history = incidents.findBySystemId(input.getSystemId());
+            UUID failureId = input.getFailure().getId();
+            Optional<Incident> recorded = history.stream().filter(incident -> incident.getFailures().stream()
+                    .anyMatch(failure -> failure.getId().equals(failureId))).findFirst();
+            if (recorded.isPresent()) {
+                result = recorded.get();
+            } else {
+                List<Incident> unresolved = history.stream()
+                        .filter(incident -> incident.getStatus() != Incident.Status.RESOLVED)
+                        .collect(Collectors.toUnmodifiableList());
+                try {
+                    result = assessment.assess(input, configuration.get(), unresolved);
+                } catch (IllegalArgumentException exception) {
+                    output.presentError("Failure input could not be assessed: " + exception.getMessage());
+                    return FailureProcessingResult.REJECTED;
+                }
+                incidents.save(result);
             }
-            incidents.save(result);
         } catch (IncidentDataException exception) {
             output.presentError(exception.getMessage());
             return FailureProcessingResult.RETRYABLE;

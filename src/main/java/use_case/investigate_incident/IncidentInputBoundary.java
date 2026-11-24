@@ -9,8 +9,8 @@ import java.util.UUID;
 public interface IncidentInputBoundary {
     /**
      * Correlates, diagnoses and saves the failure, then notifies the output boundary.
-     * Returns RETRYABLE on storage access failures; redelivering the same event ID is safe
-     * because a stored event ID reuses its incident.
+     * When monitoring redelivers a recorded event ID, presents its existing incident,
+     * even after resolution. Storage access failures return RETRYABLE.
      */
     FailureProcessingResult processFailure(FailureInput input);
 
