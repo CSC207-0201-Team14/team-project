@@ -2,6 +2,7 @@ package use_case.investigate_incident;
 
 import data_access.InMemoryIncidentRepository;
 import entity.*;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;

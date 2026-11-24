@@ -9,6 +9,7 @@ import entity.Incident;
 import entity.MonitoredSystem;
 import entity.MonitoringTarget;
 import entity.Service;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;

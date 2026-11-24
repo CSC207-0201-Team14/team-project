@@ -1,4 +1,4 @@
-package use_case.investigate_incident;
+package use_case.shared;
 
 import entity.MonitoredSystem;
 import java.util.Objects;

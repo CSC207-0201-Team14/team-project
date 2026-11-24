@@ -6,7 +6,7 @@ import support.TestData;
 import use_case.configure_monitored_system.ConfigurationLoadResult;
 import use_case.configure_monitored_system.ConfigurationRepository;
 import use_case.configure_monitored_system.ConfigurationStoreException;
-import use_case.investigate_incident.ConfigurationSnapshot;
+import use_case.shared.ConfigurationSnapshot;
 import use_case.monitor_service_health.ObservationStoreException;
 import use_case.shared.IncidentDataException;
 

@@ -4,6 +4,7 @@ import entity.Incident;
 import entity.MonitoringTarget;
 import entity.RecoveryAction;
 import entity.Service;
+import use_case.shared.ConfigurationSnapshot;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;

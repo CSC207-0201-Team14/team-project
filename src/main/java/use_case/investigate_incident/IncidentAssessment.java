@@ -1,6 +1,7 @@
 package use_case.investigate_incident;
 
 import entity.Incident;
+import use_case.shared.ConfigurationSnapshot;
 import java.util.List;
 
 /**
