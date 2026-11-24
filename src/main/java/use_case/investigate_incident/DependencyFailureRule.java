@@ -20,9 +20,6 @@ public final class DependencyFailureRule implements DiagnosticRule {
 
     @Override
     public List<DiagnosticFinding> evaluate(DiagnosticSnapshot snapshot) {
-        if (snapshot.getConfiguration().getDependencyUnavailableReason().isPresent()) {
-            return List.of();
-        }
         TreeSet<UUID> failingServices = new TreeSet<>();
         snapshot.getFailures().forEach(failure -> failingServices.add(failure.getServiceId()));
         TreeSet<UUID> configuredServices = new TreeSet<>();

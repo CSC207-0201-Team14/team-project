@@ -73,6 +73,8 @@ public final class IncidentDiagnosisChecks {
         DiagnosticFinding unknown = new ObservedFailureRule(UUID::randomUUID).evaluate(alone).get(0);
         check(unknown.getSuspectedCauseServiceId().isEmpty() && !unknown.getObservationIds().isEmpty(),
                 "Unknown cause retains the observed failure evidence");
+        check(!unknown.getExplanation().contains("No dependencies are configured"),
+                "A system with configured dependencies is not described as having none");
         for (HealthCheckResult.Outcome outcome : List.of(HealthCheckResult.Outcome.PASS,
                 HealthCheckResult.Outcome.MONITORING_ERROR)) {
             DiagnosticSnapshot recovered = fixture.snapshot(List.of(api, db), List.of(result(fixture.db, 90, outcome)));
@@ -86,14 +88,15 @@ public final class IncidentDiagnosisChecks {
                 List.of(result(fixture.db, 70, HealthCheckResult.Outcome.PASS)));
         check(dependencyRule.evaluate(conflict).isEmpty(), "Conflicting same-time outcomes leave the cause uncertain");
         MonitoredSystem roster = new MonitoredSystem(fixture.systemId, "Orders", "", fixture.services, List.of());
-        DiagnosticSnapshot unavailable = new DiagnosticSnapshot(
-                ConfigurationSnapshot.dependenciesUnavailable(roster, "Configuration read failed"),
+        DiagnosticSnapshot noEdges = new DiagnosticSnapshot(ConfigurationSnapshot.available(roster),
                 List.of(api, db), List.of(), CLOCK.instant(), WINDOW);
-        check(dependencyRule.evaluate(unavailable).isEmpty()
-                && new PotentialImpactRule(UUID::randomUUID).evaluate(unavailable).isEmpty(),
-                "Unavailable dependencies disable graph-based conclusions");
-        check(new ObservedFailureRule(UUID::randomUUID).evaluate(unavailable).get(0).getExplanation()
-                .contains("Configuration read failed"), "Unavailable analysis is explained with observed facts retained");
+        check(dependencyRule.evaluate(noEdges).isEmpty()
+                && new PotentialImpactRule(UUID::randomUUID).evaluate(noEdges).isEmpty(),
+                "Without configured dependencies, no graph-based conclusion is drawn");
+        List<DiagnosticFinding> observed = new ObservedFailureRule(UUID::randomUUID).evaluate(noEdges);
+        check(observed.size() == 2 && observed.stream().allMatch(finding -> finding.getExplanation()
+                        .contains("No dependencies are configured for this system")),
+                "3a: the missing dependency analysis is explained while observed failures are kept");
     }
 
     private static void traversesCyclesAndRetainsAlternatives() {
@@ -146,9 +149,9 @@ public final class IncidentDiagnosisChecks {
         check(!assessment.assess(fixture.input(apiFailure), fixture.configuration, List.of(foreign)).getId().equals(foreign.getId()),
                 "Correlation is scoped to the configured system");
         MonitoredSystem roster = new MonitoredSystem(fixture.systemId, "Orders", "", fixture.services, List.of());
-        ConfigurationSnapshot unavailable = ConfigurationSnapshot.dependenciesUnavailable(roster, "Graph unavailable");
-        check(!assessment.assess(fixture.input(apiFailure), unavailable, List.of(db)).getId().equals(db.getId()),
-                "Missing graph cannot support cross-service grouping");
+        check(!assessment.assess(fixture.input(apiFailure), ConfigurationSnapshot.available(roster), List.of(db))
+                        .getId().equals(db.getId()),
+                "Without configured dependencies, failures of different services are not grouped");
         FailureInput errorThenFailure = new FailureInput(fixture.systemId, failure(fixture.db, 90),
                 List.of(result(fixture.db, 80, HealthCheckResult.Outcome.MONITORING_ERROR)));
         Incident afterError = assessment.assess(errorThenFailure, fixture.configuration, List.of(db));

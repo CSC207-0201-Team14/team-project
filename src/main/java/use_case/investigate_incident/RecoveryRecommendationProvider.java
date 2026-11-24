@@ -20,7 +20,8 @@ import java.util.stream.Collectors;
  * Recommends which containers to recover for an unresolved incident, without I/O or Docker state.
  * Targets are the most upstream failing services: a failing service is a target unless it requires
  * another failing service outside its own dependency cycle. Only Docker targets receive an action;
- * HTTP targets and incidents without dependency information rely on the findings' manual next steps.
+ * HTTP targets rely on the findings' manual next steps. Without configured dependencies, every failing
+ * Docker service is its own most upstream failure.
  * <p>
  * Recorded failures stay in the incident after a service recovers, so a caller with current health can name
  * the failing services that have recovered. A recovered service no longer holds back the services that require
@@ -42,8 +43,7 @@ public final class RecoveryRecommendationProvider {
                                           Set<UUID> recoveredServiceIds) {
         Objects.requireNonNull(recoveredServiceIds, "recoveredServiceIds");
         if (incident.getStatus() == Incident.Status.RESOLVED
-                || !incident.getSystemId().equals(configuration.getSystem().getId())
-                || configuration.getDependencyUnavailableReason().isPresent()) {
+                || !incident.getSystemId().equals(configuration.getSystem().getId())) {
             return List.of();
         }
         Map<UUID, Service> services = configuration.getSystem().getServices().stream()

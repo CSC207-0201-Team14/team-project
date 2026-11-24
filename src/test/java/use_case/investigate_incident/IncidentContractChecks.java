@@ -76,12 +76,11 @@ public final class IncidentContractChecks {
                 "Reopening an investigating incident leaves it unchanged");
         check(fixture.output.details.getMissingObservationIds().equals(Set.of(fixture.passed.getId())),
                 "Missing historical evidence is explicit");
-        fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(fixture.system, "Graph unavailable");
         fixture.boundary.processFailure(new FailureInput(fixture.system.getId(),
                 failure(fixture.serviceId, T0.plusSeconds(4)), List.of()));
-        check(fixture.seenConfiguration.getDependencyUnavailableReason().isPresent()
+        check(fixture.seenConfiguration == fixture.configuration
                 && fixture.seenUnresolved.equals(List.of(investigating)),
-                "A new failure reaches assessment with the open investigation and unavailable graph");
+                "A new failure reaches assessment with the configuration and the open investigation");
     }
 
     private static void opensDetailsWithCurrentServiceNames() {
@@ -91,11 +90,11 @@ public final class IncidentContractChecks {
         Service api = service(UUID.randomUUID(), fixture.system.getId(), "Orders API", MonitoringTarget.docker("api"));
         MonitoredSystem system = new MonitoredSystem(fixture.system.getId(), "Orders", "",
                 List.of(database, api), List.of());
-        fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(system, "Graph unavailable");
+        fixture.configuration = ConfigurationSnapshot.available(system);
         fixture.boundary.openIncident(fixture.assessed.getId());
         IncidentDetails details = fixture.output.details;
         check(details.getServiceNames().equals(Map.of(database.getId(), "Database", api.getId(), "Orders API")),
-                "Details include the configured service names even when dependencies are unavailable");
+                "Details include the configured service names even without configured dependencies");
         check(fixture.configurationReads == 1, "Opening an incident reads the configuration once");
 
         fixture.configuration = null;

@@ -25,12 +25,15 @@ public final class ObservedFailureRule implements DiagnosticRule {
         TreeMap<UUID, FailureEvent> latest = new TreeMap<>();
         snapshot.getFailures().stream().sorted(Comparator.comparing(FailureEvent::getTimestamp)
                 .thenComparing(FailureEvent::getId)).forEach(failure -> latest.put(failure.getServiceId(), failure));
+        // Extension 3a: without configured dependencies, no other service can be linked to this failure.
+        boolean noDependencies = snapshot.getConfiguration().getSystem().getServices().size() > 1
+                && snapshot.getConfiguration().getSystem().getDependencies().isEmpty();
         List<DiagnosticFinding> findings = new ArrayList<>();
         for (FailureEvent failure : latest.values()) {
             String explanation = "A threshold-crossing failure was recorded. Its cause is unknown from this evidence.";
-            if (snapshot.getConfiguration().getDependencyUnavailableReason().isPresent()) {
-                explanation += " Dependency-based impact analysis is unavailable. "
-                        + snapshot.getConfiguration().getDependencyUnavailableReason().get();
+            if (noDependencies) {
+                explanation += " No dependencies are configured for this system, so dependency-based impact "
+                        + "analysis is not possible.";
             }
             List<UUID> evidence = failure.getEvidence().stream().map(HealthCheckResult::getId)
                     .sorted().collect(Collectors.toList());

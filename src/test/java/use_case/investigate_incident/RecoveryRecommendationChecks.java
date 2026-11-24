@@ -60,9 +60,9 @@ public final class RecoveryRecommendationChecks {
 
         Fixture fixture = new Fixture(true, false);
         MonitoredSystem noEdges = new MonitoredSystem(fixture.systemId, "Shop", "", fixture.services, List.of());
-        ConfigurationSnapshot unavailable = ConfigurationSnapshot.dependenciesUnavailable(noEdges, "Graph unavailable");
-        check(PROVIDER.recommend(fixture.incident(fixture.api, fixture.db), unavailable).isEmpty(),
-                "Without dependency information no upstream target can be identified");
+        check(Set.copyOf(targets(PROVIDER.recommend(fixture.incident(fixture.api, fixture.db),
+                        ConfigurationSnapshot.available(noEdges)))).equals(Set.of(fixture.api, fixture.db)),
+                "Without configured dependencies, every failing Docker service is its own most upstream failure");
     }
 
     private static void targetsEveryContainerInAFailingCycle() {

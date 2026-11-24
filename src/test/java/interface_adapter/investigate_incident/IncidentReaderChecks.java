@@ -52,8 +52,7 @@ public final class IncidentReaderChecks {
             }
         });
         ConfigurationSnapshot snapshot = reader.findBySystemId(system.getId()).orElseThrow();
-        check(snapshot.getSystem() == system && snapshot.getDependencyUnavailableReason().isEmpty(),
-                "A stored configuration with no dependencies is an available graph");
+        check(snapshot.getSystem() == system, "A stored configuration is passed through unchanged");
         check(reader.findBySystemId(UUID.randomUUID()).isEmpty(), "Missing configurations remain absent");
         expectTranslated(failure, () -> reader.findBySystemId(inaccessible));
     }

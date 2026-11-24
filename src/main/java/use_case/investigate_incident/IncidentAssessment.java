@@ -10,7 +10,7 @@ import java.util.List;
  * unresolved incident for input.systemId containing the delivered failure.
  * Repeated event IDs must reuse their existing incident. Correlation requires supporting
  * evidence; timestamp proximity alone is insufficient. Preserve historical findings.
- * Unknown causes and unavailable dependencies remain valid inputs.
+ * Unknown causes and systems without configured dependencies remain valid inputs.
  */
 public interface IncidentAssessment {
     Incident assess(FailureInput input, ConfigurationSnapshot configuration, List<Incident> unresolved);
