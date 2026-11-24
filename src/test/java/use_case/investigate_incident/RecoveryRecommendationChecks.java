@@ -28,6 +28,7 @@ public final class RecoveryRecommendationChecks {
         targetsOnlyTheMostUpstreamFailingContainer();
         givesNoActionWithoutSupportedTarget();
         targetsEveryContainerInAFailingCycle();
+        recoveredServicesStopBlockingDownstreamTargets();
         skipsUnrelatedOrResolvedIncidents();
         System.out.println("UC3 recovery recommendation checks passed");
     }
@@ -72,6 +73,38 @@ public final class RecoveryRecommendationChecks {
         RecoveryAction action = PROVIDER.recommend(fixture.incident(fixture.api, fixture.db),
                 fixture.configuration()).get(0);
         check(action.getDescription().contains("cycle"), "The cycle is explained");
+    }
+
+    private static void recoveredServicesStopBlockingDownstreamTargets() {
+        Fixture fixture = new Fixture(true, false);
+        Incident incident = fixture.incident(fixture.web, fixture.api, fixture.db);
+        RecoveryAction dbAction = PROVIDER.recommend(incident, fixture.configuration()).get(0);
+
+        List<RecoveryAction> afterDb = PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.db));
+        check(targets(afterDb).equals(List.of(fixture.api, fixture.db).stream().sorted().collect(Collectors.toList())),
+                "Once DB recovers, API is the most upstream service still failing; DB stays for UC4 to judge");
+        RecoveryAction apiAction = afterDb.stream().filter(action -> action.getTargetServiceId().equals(fixture.api))
+                .findFirst().orElseThrow();
+        check(apiAction.getDescription().contains("have recovered, so it is the most upstream service still failing"),
+                "API's description explains why it became a target");
+        check(afterDb.stream().anyMatch(action -> action.getId().equals(dbAction.getId())),
+                "DB keeps its stable action ID");
+
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.db, fixture.api)))
+                        .equals(List.of(fixture.web, fixture.api, fixture.db).stream().sorted()
+                                .collect(Collectors.toList())),
+                "With API recovered too, Web is no longer held back");
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.api)))
+                        .equals(List.of(fixture.db)),
+                "A recovered service that still requires a failing one is not a target");
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(UUID.randomUUID())))
+                        .equals(List.of(fixture.db)),
+                "IDs outside the incident change nothing");
+
+        Fixture httpDb = new Fixture(false, false);
+        check(targets(PROVIDER.recommend(httpDb.incident(httpDb.api, httpDb.db), httpDb.configuration(),
+                        Set.of(httpDb.db))).equals(List.of(httpDb.api)),
+                "Once an HTTP root cause recovers, its failing Docker dependent can be recovered");
     }
 
     private static void skipsUnrelatedOrResolvedIncidents() {
