@@ -154,11 +154,25 @@ public final class IncidentContractChecks {
                 "A missing system is not retryable");
         check(fixture.output.error.equals("Monitored system was not found"), "Missing system is presented");
         fixture.configuration = ConfigurationSnapshot.available(fixture.system);
-        HealthCheckResult foreign = observation(UUID.randomUUID(), T0, HealthCheckResult.Outcome.FAIL);
+        UUID removed = UUID.randomUUID();
+        FailureEvent removedFailure = new FailureEvent(UUID.randomUUID(), removed, T0,
+                List.of(observation(removed, T0, HealthCheckResult.Outcome.FAIL)));
+        check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), removedFailure, List.of()))
+                == FailureProcessingResult.REJECTED, "A failure of a removed service is not retryable");
+        check(fixture.output.error.equals("The failed service is no longer part of the monitored system")
+                && fixture.output.processed == null, "The rejected failure is presented and cannot report success");
+
+        // A service removed after monitoring read its observations must not discard a configured service's failure.
+        int errorsBefore = fixture.output.errors.size();
+        HealthCheckResult fromRemoved = observation(removed, T0, HealthCheckResult.Outcome.FAIL);
         check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), fixture.failure,
-                List.of(foreign))) == FailureProcessingResult.REJECTED, "Foreign services are not retryable");
-        check(fixture.output.error.contains("outside"), "Foreign observations are rejected");
-        check(fixture.output.processed == null, "Invalid input cannot report success");
+                List.of(fixture.failed, fromRemoved))) == FailureProcessingResult.PROCESSED,
+                "A configured service's failure is still processed");
+        check(fixture.seenInput.getRecentObservations().equals(List.of(fixture.failed))
+                        && fixture.seenInput.getFailure() == fixture.failure
+                        && fixture.output.errors.size() == errorsBefore,
+                "Observations of the removed service are left out of the diagnosis without an error");
+        fixture.output.processed = null; // The storage checks below assert that nothing is published.
 
         IncidentRepository failingRepository = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { throw new IncidentDataException("Read failed"); }
@@ -225,6 +239,7 @@ public final class IncidentContractChecks {
         private int configurationReads;
         private ConfigurationSnapshot seenConfiguration;
         private List<Incident> seenUnresolved;
+        private FailureInput seenInput;
         private Set<UUID> seenServiceIds;
         private final IncidentInputBoundary boundary;
 
@@ -252,6 +267,7 @@ public final class IncidentContractChecks {
                 }
                 return found;
             }, repository, (input, snapshot, unresolved) -> {
+                seenInput = input;
                 seenConfiguration = snapshot;
                 seenUnresolved = unresolved;
                 return assessed; // Fixed test output; diagnosis/correlation arrive in later stages.

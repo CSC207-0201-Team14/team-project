@@ -4,8 +4,6 @@ import entity.HealthCheckResult;
 import entity.Incident;
 import entity.RecoveryAction;
 import entity.Service;
-import use_case.shared.ConfigurationReader;
-import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -16,6 +14,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import use_case.shared.ConfigurationReader;
+import use_case.shared.ConfigurationSnapshot;
 import use_case.shared.IncidentDataException;
 import use_case.shared.IncidentRepository;
 
@@ -53,12 +53,11 @@ public final class IncidentInteractor implements IncidentInputBoundary {
             }
             Set<UUID> serviceIds = configuration.get().getSystem().getServices().stream()
                     .map(service -> service.getId()).collect(Collectors.toSet());
-            if (!serviceIds.contains(input.getFailure().getServiceId())
-                    || input.getRecentObservations().stream().anyMatch(resultItem ->
-                    !serviceIds.contains(resultItem.getServiceId()))) {
-                output.presentError("Failure input references a service outside the monitored system");
+            if (!serviceIds.contains(input.getFailure().getServiceId())) {
+                output.presentError("The failed service is no longer part of the monitored system");
                 return FailureProcessingResult.REJECTED;
             }
+            FailureInput current = withinRoster(input, serviceIds);
             List<Incident> history = incidents.findBySystemId(input.getSystemId());
             UUID failureId = input.getFailure().getId();
             Optional<Incident> recorded = history.stream().filter(incident -> incident.getFailures().stream()
@@ -70,7 +69,7 @@ public final class IncidentInteractor implements IncidentInputBoundary {
                         .filter(incident -> incident.getStatus() != Incident.Status.RESOLVED)
                         .collect(Collectors.toUnmodifiableList());
                 try {
-                    result = assessment.assess(input, configuration.get(), unresolved);
+                    result = assessment.assess(current, configuration.get(), unresolved);
                 } catch (IllegalArgumentException exception) {
                     output.presentError("Failure input could not be assessed: " + exception.getMessage());
                     return FailureProcessingResult.REJECTED;
@@ -145,6 +144,19 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     }
 
     /** Names from the current roster; empty when the system configuration is missing. */
+    /**
+     * Monitoring reads recent observations before UC3 reads the configuration, so a service removed in between
+     * can still appear. Its observations cannot support a diagnosis of the current system, so they are left out
+     * instead of rejecting the failure of a service that is still configured.
+     */
+    private static FailureInput withinRoster(FailureInput input, Set<UUID> serviceIds) {
+        List<HealthCheckResult> configured = input.getRecentObservations().stream()
+                .filter(observation -> serviceIds.contains(observation.getServiceId()))
+                .collect(Collectors.toUnmodifiableList());
+        return configured.size() == input.getRecentObservations().size() ? input
+                : new FailureInput(input.getSystemId(), input.getFailure(), configured);
+    }
+
     private static Map<UUID, String> serviceNames(Optional<ConfigurationSnapshot> configuration) {
         return configuration.map(snapshot -> snapshot.getSystem().getServices().stream()
                         .collect(Collectors.toUnmodifiableMap(Service::getId, Service::getName)))
