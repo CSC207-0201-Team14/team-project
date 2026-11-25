@@ -22,9 +22,6 @@ public final class PotentialImpactRule implements DiagnosticRule {
 
     @Override
     public List<DiagnosticFinding> evaluate(DiagnosticSnapshot snapshot) {
-        if (snapshot.getConfiguration().getDependencyUnavailableReason().isPresent()) {
-            return List.of();
-        }
         Set<UUID> observed = snapshot.getFailures().stream().map(failure -> failure.getServiceId())
                 .collect(Collectors.toCollection(TreeSet::new));
         TreeSet<UUID> services = new TreeSet<>();

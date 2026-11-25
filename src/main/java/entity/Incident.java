@@ -3,6 +3,7 @@ package entity;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -51,6 +52,56 @@ public final class Incident {
         }
         return new Incident(id, systemId, openedAt, null, null, List.of(firstFailure), Set.of(),
                 List.of(), List.of(), List.of());
+    }
+
+    /**
+     * Rebuilds a saved incident with its original finding history and resolution evidence.
+     * A null transition time means that transition was skipped or has not happened.
+     * Active findings are identified by their history IDs and keep the supplied order.
+     */
+    public static Incident restore(UUID id, UUID systemId, Instant openedAt, Instant investigatingAt,
+                                   Instant resolvedAt, List<FailureEvent> failures,
+                                   Set<UUID> potentiallyAffectedServiceIds, List<UUID> activeFindingIds,
+                                   List<DiagnosticFinding> findingHistory, List<HealthCheckResult> resolutionEvidence) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(systemId, "systemId");
+        Objects.requireNonNull(openedAt, "openedAt");
+        if (investigatingAt != null && investigatingAt.isBefore(openedAt)) {
+            throw new IllegalArgumentException("Investigation cannot begin before the incident opens");
+        }
+        Instant lastUnresolvedAt = investigatingAt == null ? openedAt : investigatingAt;
+        if (resolvedAt != null && resolvedAt.isBefore(lastUnresolvedAt)) {
+            throw new IllegalArgumentException("Resolution timestamps are out of order");
+        }
+        if ((resolvedAt == null) != resolutionEvidence.isEmpty()) {
+            throw new IllegalArgumentException("Only a resolved incident has resolution evidence");
+        }
+        if (failures.isEmpty()) {
+            throw new IllegalArgumentException("An incident requires at least one failure");
+        }
+        if (failures.get(0).getTimestamp().isAfter(openedAt)) {
+            throw new IllegalArgumentException("The first failure must occur by the time the incident opens");
+        }
+        if (failures.stream().map(FailureEvent::getId).distinct().count() != failures.size()) {
+            throw new IllegalArgumentException("Failures must have unique event IDs");
+        }
+
+        Map<UUID, DiagnosticFinding> historyById = new HashMap<>();
+        for (DiagnosticFinding finding : findingHistory) {
+            if (historyById.put(finding.getId(), finding) != null) {
+                throw new IllegalArgumentException("Finding history must contain unique finding IDs");
+            }
+        }
+        List<DiagnosticFinding> activeFindings = new ArrayList<>();
+        for (UUID activeId : activeFindingIds) {
+            DiagnosticFinding finding = historyById.get(activeId);
+            if (finding == null) {
+                throw new IllegalArgumentException("Active finding is missing from history: " + activeId);
+            }
+            activeFindings.add(finding);
+        }
+        return new Incident(id, systemId, openedAt, investigatingAt, resolvedAt, failures, potentiallyAffectedServiceIds,
+                activeFindings, findingHistory, resolutionEvidence);
     }
 
     public Incident startInvestigation(Instant timestamp) {

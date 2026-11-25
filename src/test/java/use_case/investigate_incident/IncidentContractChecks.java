@@ -2,29 +2,36 @@ package use_case.investigate_incident;
 
 import data_access.InMemoryIncidentRepository;
 import entity.*;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import use_case.shared.IncidentDataException;
 import use_case.shared.IncidentRepository;
 
+import static support.Checks.check;
+import static support.TestData.T0;
+import static support.TestData.failure;
+import static support.TestData.healthy;
+import static support.TestData.observation;
+import static support.TestData.service;
+
 /** Dependency-free checks, following entity.DomainChecks. */
 public final class IncidentContractChecks {
-    private static final Instant TIME = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Clock CLOCK = Clock.fixed(TIME.plusSeconds(5), java.time.ZoneOffset.UTC);
+    private static final Clock CLOCK = Clock.fixed(T0.plusSeconds(5), ZoneOffset.UTC);
 
     public static void main(String[] args) {
         verifiesProcessingAndInvestigationPath();
+        opensDetailsWithCurrentServiceNames();
+        listsSystemHistoryWithoutStartingInvestigation();
         reportsMissingDataAndAccessFailures();
-        verifiesRepositoryScopeAndReplacement();
         System.out.println("UC3 contract checks passed");
     }
 
@@ -41,9 +48,6 @@ public final class IncidentContractChecks {
                 "Assessment must be saved before presenting success");
         check(fixture.boundary.processFailure(input) == FailureProcessingResult.PROCESSED,
                 "Redelivering the same event reports PROCESSED");
-        check(fixture.seenUnresolved.size() == 1, "Next call receives the saved unresolved incident");
-        check(fixture.repository.findUnresolvedBySystemId(fixture.system.getId()).size() == 1,
-                "Saving the same incident ID replaces it");
 
         fixture.boundary.openIncident(fixture.assessed.getId());
         IncidentDetails details = fixture.output.details;
@@ -72,10 +76,72 @@ public final class IncidentContractChecks {
                 "Reopening an investigating incident leaves it unchanged");
         check(fixture.output.details.getMissingObservationIds().equals(Set.of(fixture.passed.getId())),
                 "Missing historical evidence is explicit");
-        fixture.configuration = ConfigurationSnapshot.dependenciesUnavailable(fixture.system, "Graph unavailable");
-        fixture.boundary.processFailure(input);
-        check(fixture.seenConfiguration.getDependencyUnavailableReason().isPresent(),
-                "Unavailable graph reaches the assessment distinctly from a known empty graph");
+        fixture.boundary.processFailure(new FailureInput(fixture.system.getId(),
+                failure(fixture.serviceId, T0.plusSeconds(4)), List.of()));
+        check(fixture.seenConfiguration == fixture.configuration
+                && fixture.seenUnresolved.equals(List.of(investigating)),
+                "A new failure reaches assessment with the configuration and the open investigation");
+    }
+
+    private static void opensDetailsWithCurrentServiceNames() {
+        Fixture fixture = new Fixture();
+        fixture.repository.save(fixture.assessed);
+        Service database = fixture.system.getServices().get(0);
+        Service api = service(UUID.randomUUID(), fixture.system.getId(), "Orders API", MonitoringTarget.docker("api"));
+        MonitoredSystem system = new MonitoredSystem(fixture.system.getId(), "Orders", "",
+                List.of(database, api), List.of());
+        fixture.configuration = ConfigurationSnapshot.available(system);
+        fixture.boundary.openIncident(fixture.assessed.getId());
+        IncidentDetails details = fixture.output.details;
+        check(details.getServiceNames().equals(Map.of(database.getId(), "Database", api.getId(), "Orders API")),
+                "Details include the configured service names even without configured dependencies");
+        check(fixture.configurationReads == 1, "Opening an incident reads the configuration once");
+
+        fixture.configuration = null;
+        fixture.boundary.openIncident(fixture.assessed.getId());
+        IncidentDetails historical = fixture.output.details;
+        check(historical.getIncident().getId().equals(fixture.assessed.getId())
+                && historical.getServiceNames().isEmpty() && historical.getRecommendedActions().isEmpty()
+                && fixture.output.error == null, "Details remain available when the system configuration is missing");
+    }
+
+    private static void listsSystemHistoryWithoutStartingInvestigation() {
+        Fixture fixture = new Fixture();
+        UUID systemId = fixture.system.getId();
+        Instant recent = T0.plusSeconds(2);
+        Incident resolved = fixture.assessed.resolve(recent, T0, Map.of(fixture.serviceId, healthy(fixture.serviceId, recent)));
+        Incident open = Incident.open(new UUID(0, 1), systemId, recent, fixture.failure);
+        Incident investigating = Incident.open(new UUID(0, 2), systemId, recent, fixture.failure)
+                .startInvestigation(recent);
+        fixture.repository.save(resolved);
+        fixture.repository.save(investigating);
+        fixture.repository.save(open);
+        fixture.repository.save(Incident.open(UUID.randomUUID(), UUID.randomUUID(), recent, fixture.failure));
+
+        fixture.boundary.listIncidents(systemId);
+        List<IncidentSummary> summaries = fixture.output.summaries;
+        List<Incident> expected = List.of(open, investigating, resolved);
+        check(summaries.size() == expected.size(), "Only the selected system's history is presented");
+        for (int i = 0; i < expected.size(); i++) {
+            Incident incident = expected.get(i);
+            IncidentSummary summary = summaries.get(i);
+            check(summary.getIncidentId().equals(incident.getId()) && summary.getStatus() == incident.getStatus()
+                    && summary.getOpenedAt().equals(incident.getOpenedAt())
+                    && summary.getFailingServiceIds().equals(incident.getFailingServiceIds()),
+                    "Summaries retain incident identity, status, opening time and failing services in display order");
+        }
+        check(summaries.get(0).getServiceNames().equals(Map.of(fixture.serviceId, "Database")),
+                "Summaries carry configured names so the list can show services by name");
+        check(fixture.repository.findById(open.getId()).orElseThrow() == open && fixture.output.details == null,
+                "Listing an open incident leaves it open");
+        fixture.boundary.listIncidents(UUID.randomUUID());
+        check(fixture.output.summaries.isEmpty() && fixture.output.error == null,
+                "A system without incident history receives an empty list");
+        fixture.configuration = null;
+        fixture.boundary.listIncidents(systemId);
+        check(fixture.output.summaries.size() == expected.size()
+                && fixture.output.summaries.get(0).getServiceNames().isEmpty() && fixture.output.error == null,
+                "History remains listable without names when the configuration is missing");
     }
 
     private static void reportsMissingDataAndAccessFailures() {
@@ -87,15 +153,29 @@ public final class IncidentContractChecks {
                 "A missing system is not retryable");
         check(fixture.output.error.equals("Monitored system was not found"), "Missing system is presented");
         fixture.configuration = ConfigurationSnapshot.available(fixture.system);
-        HealthCheckResult foreign = result(UUID.randomUUID(), HealthCheckResult.Outcome.FAIL);
+        UUID removed = UUID.randomUUID();
+        FailureEvent removedFailure = new FailureEvent(UUID.randomUUID(), removed, T0,
+                List.of(observation(removed, T0, HealthCheckResult.Outcome.FAIL)));
+        check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), removedFailure, List.of()))
+                == FailureProcessingResult.REJECTED, "A failure of a removed service is not retryable");
+        check(fixture.output.error.equals("The failed service is no longer part of the monitored system")
+                && fixture.output.processed == null, "The rejected failure is presented and cannot report success");
+
+        // A service removed after monitoring read its observations must not discard a configured service's failure.
+        int errorsBefore = fixture.output.errors.size();
+        HealthCheckResult fromRemoved = observation(removed, T0, HealthCheckResult.Outcome.FAIL);
         check(fixture.boundary.processFailure(new FailureInput(fixture.system.getId(), fixture.failure,
-                List.of(foreign))) == FailureProcessingResult.REJECTED, "Foreign services are not retryable");
-        check(fixture.output.error.contains("outside"), "Foreign observations are rejected");
-        check(fixture.output.processed == null, "Invalid input cannot report success");
+                List.of(fixture.failed, fromRemoved))) == FailureProcessingResult.PROCESSED,
+                "A configured service's failure is still processed");
+        check(fixture.seenInput.getRecentObservations().equals(List.of(fixture.failed))
+                        && fixture.seenInput.getFailure() == fixture.failure
+                        && fixture.output.errors.size() == errorsBefore,
+                "Observations of the removed service are left out of the diagnosis without an error");
+        fixture.output.processed = null; // The storage checks below assert that nothing is published.
 
         IncidentRepository failingRepository = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { throw new IncidentDataException("Read failed"); }
-            public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
+            public List<Incident> findBySystemId(UUID id) { throw new IncidentDataException("List failed"); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
@@ -103,8 +183,8 @@ public final class IncidentContractChecks {
                 new RecoveryRecommendationProvider(), CLOCK, fixture.output);
         check(boundary.processFailure(fixture.input()) == FailureProcessingResult.RETRYABLE,
                 "A storage failure is retryable");
-        check(fixture.output.error.equals("Save failed") && fixture.output.processed == null,
-                "Save failure is reported without publishing success");
+        check(fixture.output.error.equals("List failed") && fixture.output.processed == null,
+                "A history read failure is reported without publishing success");
 
         InMemoryIncidentRepository untouched = new InMemoryIncidentRepository();
         IncidentInputBoundary invalid = new IncidentInteractor(id -> Optional.of(fixture.configuration),
@@ -117,67 +197,66 @@ public final class IncidentContractChecks {
                 "Invalid assessment input is rejected, presented and not saved instead of escaping");
         boundary.openIncident(fixture.assessed.getId());
         check(fixture.output.error.equals("Read failed"), "Read failure is reported");
+        boundary.listIncidents(fixture.system.getId());
+        check("List failed".equals(fixture.output.error) && fixture.output.summaries == null,
+                "A history read failure presents the storage error without publishing a list");
 
         IncidentRepository unsavable = new IncidentRepository() {
             public Optional<Incident> findById(UUID id) { return Optional.of(fixture.assessed); }
-            public List<Incident> findUnresolvedBySystemId(UUID id) { return List.of(); }
+            public List<Incident> findBySystemId(UUID id) { return List.of(fixture.assessed); }
             public void save(Incident incident) { throw new IncidentDataException("Save failed"); }
         };
         fixture.output.error = null;
-        new IncidentInteractor(id -> Optional.of(fixture.configuration), (services, ids) -> Map.of(), unsavable,
+        IncidentInputBoundary failingSave = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                (services, ids) -> Map.of(), unsavable,
                 (input, configuration, unresolved) -> fixture.assessed, new RecoveryRecommendationProvider(),
-                CLOCK, fixture.output).openIncident(fixture.assessed.getId());
+                CLOCK, fixture.output);
+        FailureInput newFailure = new FailureInput(fixture.system.getId(), failure(fixture.serviceId, T0), List.of());
+        check(failingSave.processFailure(newFailure) == FailureProcessingResult.RETRYABLE
+                && "Save failed".equals(fixture.output.error) && fixture.output.processed == null,
+                "A failed save is retryable and does not publish success");
+        fixture.output.error = null;
+        check(failingSave.processFailure(fixture.input()) == FailureProcessingResult.PROCESSED
+                && fixture.output.processed == fixture.assessed && fixture.output.error == null,
+                "An already recorded delivery can be acknowledged without another save");
+        failingSave.openIncident(fixture.assessed.getId());
         check("Save failed".equals(fixture.output.error) && fixture.output.details == null,
                 "Failing to save the investigating status presents an error instead of details");
-    }
-
-    private static void verifiesRepositoryScopeAndReplacement() {
-        Fixture fixture = new Fixture();
-        fixture.repository.save(fixture.assessed);
-        Incident investigating = fixture.assessed.startInvestigation(TIME.plusSeconds(1));
-        fixture.repository.save(investigating);
-        check(fixture.repository.findById(investigating.getId()).orElseThrow() == investigating,
-                "Updates replace the immutable value");
-        check(fixture.repository.findUnresolvedBySystemId(UUID.randomUUID()).isEmpty(), "System queries are scoped");
-        HealthCheckResult recovered = new HealthCheckResult(UUID.randomUUID(), fixture.serviceId,
-                TIME.plusSeconds(3), HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "Recovered");
-        Incident resolved = investigating.resolve(TIME.plusSeconds(3), TIME.plusSeconds(2),
-                Map.of(fixture.serviceId, ServiceHealth.evaluated(HealthStatus.HEALTHY, recovered)));
-        fixture.repository.save(resolved);
-        check(fixture.repository.findUnresolvedBySystemId(fixture.system.getId()).isEmpty(),
-                "Resolved incidents are excluded from active correlation");
-        check(fixture.repository.findById(resolved.getId()).isPresent(), "Resolved history remains readable");
     }
 
     private static final class Fixture {
         private final UUID serviceId = UUID.randomUUID();
         private final MonitoredSystem system;
-        private final HealthCheckResult failed = result(serviceId, HealthCheckResult.Outcome.FAIL);
-        private final HealthCheckResult passed = result(serviceId, HealthCheckResult.Outcome.PASS);
-        private final FailureEvent failure = new FailureEvent(UUID.randomUUID(), serviceId, TIME, List.of(failed));
+        private final HealthCheckResult failed = observation(serviceId, T0, HealthCheckResult.Outcome.FAIL);
+        private final HealthCheckResult passed = observation(serviceId, T0, HealthCheckResult.Outcome.PASS);
+        private final FailureEvent failure = new FailureEvent(UUID.randomUUID(), serviceId, T0, List.of(failed));
         private final Incident assessed;
         private final InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
         private final Map<UUID, HealthCheckResult> retained = new HashMap<>();
-        private final CapturingOutput output = new CapturingOutput();
+        private final RecordingOutput output = new RecordingOutput();
         private ConfigurationSnapshot configuration;
+        private int configurationReads;
         private ConfigurationSnapshot seenConfiguration;
         private List<Incident> seenUnresolved;
+        private FailureInput seenInput;
         private Set<UUID> seenServiceIds;
         private final IncidentInputBoundary boundary;
 
         private Fixture() {
             UUID systemId = UUID.randomUUID();
-            Service service = new Service(serviceId, systemId, "Database", MonitoringTarget.docker("db"),
-                    new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2));
-            system = new MonitoredSystem(systemId, "Orders", "", List.of(service), List.of());
+            system = new MonitoredSystem(systemId, "Orders", "",
+                    List.of(service(serviceId, systemId, "Database", MonitoringTarget.docker("db"))), List.of());
             configuration = ConfigurationSnapshot.available(system);
             DiagnosticFinding history = new DiagnosticFinding(UUID.randomUUID(), "test-fixture", serviceId,
-                    TIME, Optional.empty(), List.of(failed.getId(), passed.getId()), List.of(),
+                    T0, Optional.empty(), List.of(failed.getId(), passed.getId()), List.of(),
                     "Fixture assessment with unknown cause", List.of("Inspect logs"));
-            assessed = Incident.open(UUID.randomUUID(), systemId, TIME, failure)
+            assessed = Incident.open(UUID.randomUUID(), systemId, T0, failure)
                     .updateAssessment(Set.of(), List.of(history)).updateAssessment(Set.of(), List.of());
             retained.put(passed.getId(), passed);
-            boundary = new IncidentInteractor(id -> Optional.ofNullable(configuration), (services, ids) -> {
+            boundary = new IncidentInteractor(id -> {
+                configurationReads++;
+                return Optional.ofNullable(configuration);
+            }, (services, ids) -> {
                 seenServiceIds = services;
                 Map<UUID, HealthCheckResult> found = new HashMap<>();
                 for (UUID id : ids) {
@@ -187,6 +266,7 @@ public final class IncidentContractChecks {
                 }
                 return found;
             }, repository, (input, snapshot, unresolved) -> {
+                seenInput = input;
                 seenConfiguration = snapshot;
                 seenUnresolved = unresolved;
                 return assessed; // Fixed test output; diagnosis/correlation arrive in later stages.
@@ -194,25 +274,5 @@ public final class IncidentContractChecks {
         }
 
         private FailureInput input() { return new FailureInput(system.getId(), failure, List.of(failed)); }
-    }
-
-    private static final class CapturingOutput implements IncidentOutputBoundary {
-        private Incident processed;
-        private IncidentDetails details;
-        private String error;
-
-        public void presentProcessed(Incident incident) { processed = incident; }
-        public void presentDetails(IncidentDetails result) { details = result; }
-        public void presentError(String message) { error = message; }
-    }
-
-    private static HealthCheckResult result(UUID serviceId, HealthCheckResult.Outcome outcome) {
-        return new HealthCheckResult(UUID.randomUUID(), serviceId, TIME, outcome, OptionalLong.empty(), "");
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
     }
 }

@@ -1,48 +1,40 @@
 package use_case.investigate_incident;
 
+import use_case.shared.IncidentWorker;
+
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * Decorator that runs every incident call on one worker thread, so the monitoring thread (failures)
- * and the UI (opening incidents) never write the same incident concurrently.
- * processFailure waits for its result; openIncident returns immediately and presents through the output boundary.
+ * Runs incident calls on the shared incident worker. Monitoring waits for the processing result.
+ * UI requests to list or open incidents return immediately and present through the output boundary.
+ * The worker belongs to the composition root, which also shares it with recovery and shuts it down.
  */
-public final class SerializedIncidentInputBoundary implements IncidentInputBoundary, AutoCloseable {
+public final class SerializedIncidentInputBoundary implements IncidentInputBoundary {
     private final IncidentInputBoundary delegate;
-    private final ExecutorService worker;
-    private volatile Thread workerThread;
+    private final IncidentWorker worker;
 
-    public SerializedIncidentInputBoundary(IncidentInputBoundary delegate) {
+    public SerializedIncidentInputBoundary(IncidentInputBoundary delegate, IncidentWorker worker) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
-        this.worker = Executors.newSingleThreadExecutor(task -> {
-            Thread thread = new Thread(() -> {
-                workerThread = Thread.currentThread();
-                task.run();
-            }, "incident-worker");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.worker = Objects.requireNonNull(worker, "worker");
     }
 
     /**
-     * Returns RETRYABLE if the caller is interrupted or this boundary is closed;
+     * Returns RETRYABLE if the caller is interrupted or the worker has shut down;
      * the caller keeps the event and redelivers it with the same ID.
      */
     @Override
     public FailureProcessingResult processFailure(FailureInput input) {
         Objects.requireNonNull(input, "input");
-        if (Thread.currentThread() == workerThread) {
+        if (worker.isWorkerThread()) {
             return delegate.processFailure(input);
         }
-        Future<FailureProcessingResult> result;
+        FutureTask<FailureProcessingResult> result = new FutureTask<>(() -> delegate.processFailure(input));
         try {
-            result = worker.submit(() -> delegate.processFailure(input));
+            worker.execute(result);
         } catch (RejectedExecutionException closed) {
             return FailureProcessingResult.RETRYABLE;
         }
@@ -63,20 +55,23 @@ public final class SerializedIncidentInputBoundary implements IncidentInputBound
         }
     }
 
-    /** Queues the request; it is ignored once this boundary is closed. */
+    @Override
+    public void listIncidents(UUID systemId) {
+        Objects.requireNonNull(systemId, "systemId");
+        queuePresentation(() -> delegate.listIncidents(systemId));
+    }
+
     @Override
     public void openIncident(UUID incidentId) {
         Objects.requireNonNull(incidentId, "incidentId");
+        queuePresentation(() -> delegate.openIncident(incidentId));
+    }
+
+    private void queuePresentation(Runnable request) {
         try {
-            worker.execute(() -> delegate.openIncident(incidentId));
+            worker.execute(request);
         } catch (RejectedExecutionException closed) {
             // Shutting down: nothing to present.
         }
-    }
-
-    /** Lets queued calls finish and rejects new ones. */
-    @Override
-    public void close() {
-        worker.shutdown();
     }
 }
