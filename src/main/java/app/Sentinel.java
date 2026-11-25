@@ -2,6 +2,9 @@ package app;
 
 import data_access.configuration.JsonConfigurationRepository;
 import data_access.http.HttpHealthChecker;
+import data_access.docker.DockerEngineInspector;
+import data_access.docker.DockerHealthChecker;
+import data_access.monitoring.TargetHealthChecker;
 import data_access.persistence.JsonObservationStore;
 import data_access.persistence.JsonIncidentRepository;
 import infrastructure.scheduling.ExecutorMonitoringScheduler;
@@ -154,8 +157,10 @@ public final class Sentinel implements AutoCloseable {
             throw new IllegalStateException("Monitoring has already been wired");
         }
         IncidentInvestigation investigation = wireInvestigateIncident(observations, observations, incidentOutput);
-        MonitoringExecution checks = new MonitoringExecution(new MonitoringInteractor(new HttpHealthChecker(clock),
-                observations, monitoringOutput, investigation.getFailureListener()));
+        TargetHealthChecker checker = new TargetHealthChecker(new HttpHealthChecker(clock),
+                new DockerHealthChecker(new DockerEngineInspector(), clock));
+        MonitoringExecution checks = new MonitoringExecution(new MonitoringInteractor(checker, observations,
+                monitoringOutput, investigation.getFailureListener()));
         MonitoringSessionInteractor sessions = new MonitoringSessionInteractor(checks, monitoringScheduler,
                 monitoringOutput);
         monitoring = new MonitoringApplication(checks, sessions, investigation);
