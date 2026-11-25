@@ -2,7 +2,7 @@ package app;
 
 import data_access.configuration.JsonConfigurationRepository;
 import data_access.http.HttpHealthChecker;
-import data_access.persistence.InMemoryObservationStore;
+import data_access.persistence.JsonObservationStore;
 import data_access.persistence.JsonIncidentRepository;
 import infrastructure.scheduling.ExecutorMonitoringScheduler;
 import infrastructure.scheduling.SingleThreadIncidentWorker;
@@ -68,13 +68,14 @@ public final class Sentinel implements AutoCloseable {
     /** Owned here: shared by every use case that reads or writes incidents, and closed with the application. */
     private final SingleThreadIncidentWorker incidentWorker = new SingleThreadIncidentWorker();
     private final ExecutorMonitoringScheduler monitoringScheduler = new ExecutorMonitoringScheduler();
-    private final InMemoryObservationStore observations = new InMemoryObservationStore();
+    private final JsonObservationStore observations;
     private MonitoringApplication monitoring;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public Sentinel(Path dataDirectory, Clock clock) {
         this.configurations = new JsonConfigurationRepository(dataDirectory.resolve("systems"));
         this.incidents = new JsonIncidentRepository(dataDirectory.resolve("incidents"));
+        this.observations = new JsonObservationStore(dataDirectory.resolve("observations"));
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 

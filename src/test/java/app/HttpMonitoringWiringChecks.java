@@ -45,6 +45,7 @@ public final class HttpMonitoringWiringChecks {
         Path root = Files.createTempDirectory(Files.createDirectories(Path.of("target")), "http-monitoring-");
         try {
             httpFailureCreatesIncident(root.resolve("flow"));
+            failureHistorySurvivesApplicationRestart(root.resolve("restart"));
             closingLetsAnAcceptedCheckFinish(root.resolve("shutdown"));
         } finally {
             List<Path> created;
@@ -144,6 +145,62 @@ public final class HttpMonitoringWiringChecks {
             release.countDown();
             app.close();
             checks.shutdownNow();
+            server.stop(0);
+        }
+    }
+
+    private static void failureHistorySurvivesApplicationRestart(Path root) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/health", exchange -> {
+            try {
+                exchange.sendResponseHeaders(503, -1);
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+        TestClock clock = new TestClock();
+        Service service = saveService(root, server.getAddress().getPort(), 2);
+        Output first = new Output();
+        Output second = new Output();
+        try {
+            try (Sentinel app = new Sentinel(root, clock)) {
+                app.wireMonitoring(first, first).getChecks().checkOnce(service);
+                require(first.processed.isEmpty(), "A single failure must not cross a threshold of two");
+            }
+            clock.advance();
+            UUID incidentId;
+            try (Sentinel restarted = new Sentinel(root, clock)) {
+                Sentinel.MonitoringApplication runtime = restarted.wireMonitoring(second, second);
+                runtime.getChecks().checkOnce(service);
+                List<Incident> incidents = new JsonIncidentRepository(root.resolve("incidents"))
+                        .findBySystemId(service.getSystemId());
+                require(incidents.size() == 1 && second.processed.size() == 1,
+                        "A pre-restart failure and a fresh failure must cross the threshold together");
+                Incident incident = incidents.get(0);
+                incidentId = incident.getId();
+                require(incident.getFailures().get(0).getEvidence().size() == 2,
+                        "The resulting failure must retain evidence from both application instances");
+                runtime.getInvestigation().getInvestigation().openIncident(incidentId);
+                IncidentDetails details = second.details.get(5, TimeUnit.SECONDS);
+                require(details.getMissingObservationIds().isEmpty()
+                                && details.getObservations().containsKey(first.checks.get(0).getId()),
+                        "Historical lookup must load evidence saved by the earlier application instance");
+            }
+            clock.advance();
+            Output third = new Output();
+            try (Sentinel restartedAgain = new Sentinel(root, clock)) {
+                Sentinel.MonitoringApplication runtime = restartedAgain.wireMonitoring(third, third);
+                runtime.getChecks().checkOnce(service);
+                require(new JsonIncidentRepository(root.resolve("incidents"))
+                                .findBySystemId(service.getSystemId()).size() == 1
+                                && third.processed.equals(List.of(incidentId)),
+                        "Replaying persistent history must acknowledge the same incident, not create a duplicate");
+                runtime.getInvestigation().getInvestigation().openIncident(incidentId);
+                require(third.details.get(5, TimeUnit.SECONDS).getMissingObservationIds().isEmpty(),
+                        "Incident evidence remains available after another restart");
+            }
+        } finally {
             server.stop(0);
         }
     }
