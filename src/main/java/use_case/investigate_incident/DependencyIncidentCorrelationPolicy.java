@@ -35,9 +35,6 @@ public final class DependencyIncidentCorrelationPolicy implements IncidentCorrel
         if (incoming.getServiceId().equals(existing.getServiceId())) {
             return true;
         }
-        if (snapshot.getConfiguration().getDependencyUnavailableReason().isPresent()) {
-            return false;
-        }
         return snapshot.getGraph().path(incoming.getServiceId(), existing.getServiceId()).isPresent()
                 || snapshot.getGraph().path(existing.getServiceId(), incoming.getServiceId()).isPresent();
     }

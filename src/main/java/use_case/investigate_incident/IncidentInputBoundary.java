@@ -9,10 +9,14 @@ import java.util.UUID;
 public interface IncidentInputBoundary {
     /**
      * Correlates, diagnoses and saves the failure, then notifies the output boundary.
-     * Returns RETRYABLE on storage access failures; redelivering the same event ID is safe
-     * because a stored event ID reuses its incident.
+     * When monitoring redelivers a recorded event ID, presents its existing incident,
+     * even after resolution. Storage access failures return RETRYABLE. A failure of a service that is no longer
+     * configured returns REJECTED; observations of other removed services are ignored instead.
      */
     FailureProcessingResult processFailure(FailureInput input);
+
+    /** Presents the system's incident history, newest opening first, without changing incident status. */
+    void listIncidents(UUID systemId);
 
     /**
      * Moves an OPEN incident to INVESTIGATING and saves it before presenting details.

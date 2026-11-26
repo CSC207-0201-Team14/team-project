@@ -1,32 +1,48 @@
 package use_case.investigate_incident;
 
-import entity.FailureEvent;
-import entity.HealthCheckResult;
-import java.time.Instant;
+import infrastructure.scheduling.SingleThreadIncidentWorker;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static support.Checks.check;
+import static support.Checks.expect;
+import static support.TestData.T0;
+import static support.TestData.failure;
+
 /** Run explicitly after mvn test-compile, following the existing test convention. */
 public final class SerializedIncidentChecks {
-    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
-
     public static void main(String[] args) throws Exception {
         runsMonitoringAndUiCallsOneAtATime();
         returnsRetryableWhenInterruptedOrClosed();
         allowsNestedCallsFromTheWorker();
+        sharesWorkerWithRecoveryOperations();
         System.out.println("UC3 serialized boundary checks passed");
     }
 
     private static void runsMonitoringAndUiCallsOneAtATime() throws Exception {
-        CountingBoundary inner = new CountingBoundary(input -> FailureProcessingResult.PROCESSED);
-        try (SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner)) {
+        CountDownLatch processing = new CountDownLatch(1);
+        CountDownLatch uiQueued = new CountDownLatch(1);
+        AtomicReference<Thread> processingThread = new AtomicReference<>();
+        CountingBoundary inner = new CountingBoundary(input -> {
+            processingThread.set(Thread.currentThread());
+            processing.countDown();
+            try {
+                check(uiQueued.await(5, TimeUnit.SECONDS), "UI requests return while the worker is busy");
+            } catch (InterruptedException interrupted) {
+                throw new AssertionError(interrupted);
+            }
+            return FailureProcessingResult.PROCESSED;
+        });
+        try (SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker()) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
             List<Thread> callers = new ArrayList<>();
             List<FailureProcessingResult> results = new ArrayList<>();
             for (int i = 0; i < 4; i++) {
@@ -38,31 +54,47 @@ public final class SerializedIncidentChecks {
                 }));
             }
             callers.forEach(Thread::start);
+            check(processing.await(5, TimeUnit.SECONDS), "Worker starts processing a failure");
+            List<String> expectedRequests = new ArrayList<>();
             for (int i = 0; i < 4; i++) {
-                boundary.openIncident(UUID.randomUUID());
+                UUID systemId = UUID.randomUUID();
+                UUID incidentId = UUID.randomUUID();
+                boundary.listIncidents(systemId);
+                boundary.openIncident(incidentId);
+                expectedRequests.add("list " + systemId);
+                expectedRequests.add("open " + incidentId);
             }
+            uiQueued.countDown();
             for (Thread caller : callers) {
                 caller.join();
             }
-            check(inner.opened.await(5, TimeUnit.SECONDS), "Queued open requests run");
+            boundary.processFailure(input()); // Wait for all earlier UI requests to finish.
+            check(inner.uiRequests.equals(expectedRequests), "List and open requests run in submission order");
             check(results.size() == 4 && results.stream().allMatch(r -> r == FailureProcessingResult.PROCESSED),
                     "Monitoring callers receive the interactor's result");
-            check(inner.maxActive.get() == 1, "Failures and open requests never overlap");
-            check("incident-worker".equals(inner.openThread.get()), "Open requests run off the calling thread");
+            check(inner.maxActive.get() == 1, "Monitoring and UI calls never overlap");
+            check(processingThread.get() != Thread.currentThread()
+                    && inner.uiThreads.stream().allMatch(thread -> thread == processingThread.get()),
+                    "List, open and failure requests use the same worker thread");
         }
     }
 
     private static void returnsRetryableWhenInterruptedOrClosed() {
         CountingBoundary inner = new CountingBoundary(input -> FailureProcessingResult.PROCESSED);
-        SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner);
+        SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker();
+        SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
+        check(!AutoCloseable.class.isAssignableFrom(SerializedIncidentInputBoundary.class),
+                "Only the worker's owner can shut the worker down");
         Thread.currentThread().interrupt();
         FailureProcessingResult interrupted = boundary.processFailure(input());
         check(interrupted == FailureProcessingResult.RETRYABLE && Thread.interrupted(),
                 "An interrupted caller keeps the event and its interrupt flag");
-        boundary.close();
+        worker.close();
         check(boundary.processFailure(input()) == FailureProcessingResult.RETRYABLE,
-                "A closed boundary asks the caller to redeliver");
+                "A closed worker makes the boundary ask the caller to redeliver");
         boundary.openIncident(UUID.randomUUID());
+        boundary.listIncidents(UUID.randomUUID());
+        check(inner.uiRequests.isEmpty(), "A closed worker ignores new UI requests");
     }
 
     private static void allowsNestedCallsFromTheWorker() {
@@ -70,33 +102,50 @@ public final class SerializedIncidentChecks {
         AtomicInteger depth = new AtomicInteger();
         CountingBoundary inner = new CountingBoundary(input -> depth.incrementAndGet() == 1
                 ? outer.get().processFailure(input) : FailureProcessingResult.PROCESSED);
-        try (SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner)) {
+        try (SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker()) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
             outer.set(boundary);
             check(boundary.processFailure(input()) == FailureProcessingResult.PROCESSED,
                     "A call made from the worker runs directly instead of deadlocking");
         }
     }
 
-    private static FailureInput input() {
-        UUID service = UUID.randomUUID();
-        HealthCheckResult failed = new HealthCheckResult(UUID.randomUUID(), service, START,
-                HealthCheckResult.Outcome.FAIL, OptionalLong.empty(), "");
-        return new FailureInput(UUID.randomUUID(), new FailureEvent(UUID.randomUUID(), service, START,
-                List.of(failed)), List.of());
+    private static void sharesWorkerWithRecoveryOperations() throws Exception {
+        SingleThreadIncidentWorker worker = new SingleThreadIncidentWorker();
+        AtomicReference<Thread> processingThread = new AtomicReference<>();
+        CountingBoundary inner = new CountingBoundary(input -> {
+            processingThread.set(Thread.currentThread());
+            return FailureProcessingResult.PROCESSED;
+        });
+        UUID incidentId = UUID.randomUUID();
+        FutureTask<Thread> recoveryOperation = new FutureTask<>(Thread::currentThread);
+        try (worker) {
+            SerializedIncidentInputBoundary boundary = new SerializedIncidentInputBoundary(inner, worker);
+            FutureTask<FailureProcessingResult> firstOperation = new FutureTask<>(() -> boundary.processFailure(input()));
+            worker.execute(firstOperation);
+            check(firstOperation.get(5, TimeUnit.SECONDS) == FailureProcessingResult.PROCESSED,
+                    "The first operation submitted by another use case can call UC3 on the shared worker");
+            boundary.openIncident(incidentId);
+            worker.execute(recoveryOperation);
+        }
+        Thread recoveryThread = recoveryOperation.get(5, TimeUnit.SECONDS);
+        check(inner.uiRequests.equals(List.of("open " + incidentId))
+                        && inner.uiThreads.equals(List.of(recoveryThread)) && processingThread.get() == recoveryThread,
+                "Closing the shared worker drains queued investigation and recovery operations on one thread");
+        expect(RejectedExecutionException.class, () -> worker.execute(recoveryOperation),
+                "The closed shared worker rejects later incident operations");
     }
 
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
+    private static FailureInput input() {
+        return new FailureInput(UUID.randomUUID(), failure(UUID.randomUUID(), T0), List.of());
     }
 
     private static final class CountingBoundary implements IncidentInputBoundary {
         private final Function<FailureInput, FailureProcessingResult> behaviour;
         private final AtomicInteger active = new AtomicInteger();
         private final AtomicInteger maxActive = new AtomicInteger();
-        private final CountDownLatch opened = new CountDownLatch(4);
-        private final AtomicReference<String> openThread = new AtomicReference<>();
+        private final List<String> uiRequests = new ArrayList<>();
+        private final List<Thread> uiThreads = new ArrayList<>();
 
         CountingBoundary(Function<FailureInput, FailureProcessingResult> behaviour) {
             this.behaviour = behaviour;
@@ -113,11 +162,20 @@ public final class SerializedIncidentChecks {
         }
 
         @Override
+        public void listIncidents(UUID systemId) {
+            recordRequest("list " + systemId);
+        }
+
+        @Override
         public void openIncident(UUID incidentId) {
+            recordRequest("open " + incidentId);
+        }
+
+        private void recordRequest(String request) {
             enter();
-            openThread.set(Thread.currentThread().getName());
+            uiRequests.add(request);
+            uiThreads.add(Thread.currentThread());
             active.decrementAndGet();
-            opened.countDown();
         }
 
         private void enter() {

@@ -73,16 +73,6 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 **Success outcome:** A valid monitored system, its services, and their dependencies are saved and available for monitoring.
 
-### Run the configuration editor
-
-Run `mvn compile exec:java -Dexec.mainClass=app.Sentinel` from the repository root with a graphical session.
-Create a system or select a saved one, add or edit HTTP and Docker services, and use the System Map to specify which services depend on others.
-Removing a service from the draft also removes its dependency edges. Save the configuration to commit the changes.
-Configurations are stored under `~/.sentinel/systems` and can be reopened after restarting Sentinel.
-
-Run the UC1 checks with `mvn test-compile` followed by
-`mvn exec:java -Dexec.classpathScope=test -Dexec.mainClass=use_case.configure_monitored_system.ConfigurationInteractorChecks`
-and `mvn exec:java -Dexec.classpathScope=test -Dexec.mainClass=data_access.configuration.JsonConfigurationRepositoryChecks`.
 
 ### Use Case 2
 
@@ -134,7 +124,7 @@ and `mvn exec:java -Dexec.classpathScope=test -Dexec.mainClass=data_access.confi
 **Extensions:**
 
 - **1a. Cause is uncertain:** Sentinel states that the cause is unknown and displays the available evidence without presenting a confirmed diagnosis.
-- **3a. Dependency information is unavailable:** Sentinel displays recorded failures and explains that dependency-based impact analysis is unavailable.
+- **3a. No dependencies are configured:** Sentinel displays recorded failures and explains that dependency-based impact analysis is not possible.
 - **5a. No recovery action is supported:** Sentinel provides manual troubleshooting guidance.
 
 **Success outcome:** The developer can identify the recorded failures, inspect the evidence behind any suspected cause, and review available next steps. Investigation alone does not resolve the incident.
@@ -234,10 +224,33 @@ Compile the main and test classes with `mvn test-compile`. Run the dependency-fr
 
 ## How to Run
 
-[Instructions for running the program.]
+Requires JDK 11 or later and Maven. Run every command from the project root.
+
+**Start the desktop app:**
+
+```
+mvn compile exec:java -Dexec.mainClass=app.Sentinel
+```
+
+The window has one tab per use case: Configure (UC1), Monitor (UC2), Incidents (UC3) and Recover (UC4).
+Monitor and Recover are placeholders in this version. Configurations and incidents are saved under `~/.sentinel`.
+
+**Run the checks:** the tests are plain `main` programs. Compile them and copy Gson next to the classes once:
+
+```
+mvn test-compile dependency:copy-dependencies
+```
+
+Then run any check class, for example the UC3 suite:
+
+- PowerShell or Command Prompt: `java -cp "target/classes;target/test-classes;target/dependency/*" use_case.investigate_incident.InvestigateIncidentCheckSuite`
+- macOS or Linux: `java -cp "target/classes:target/test-classes:target/dependency/*" use_case.investigate_incident.InvestigateIncidentCheckSuite`
 
 ---
 
 ## Notes
 
-[Any additional project information.]
+### Additional resources
+
+- [UC3: Investigate an Incident — Architecture](docs/uc3-investigate-incident.md)
+- [UC4: Recover a Service and Verify Resolution — Architecture](docs/uc4-recover-service.md)

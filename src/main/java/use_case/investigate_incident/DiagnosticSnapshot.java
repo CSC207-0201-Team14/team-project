@@ -2,6 +2,7 @@ package use_case.investigate_incident;
 
 import entity.FailureEvent;
 import entity.HealthCheckResult;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;

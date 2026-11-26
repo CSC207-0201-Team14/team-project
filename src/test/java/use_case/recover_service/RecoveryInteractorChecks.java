@@ -28,8 +28,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import use_case.investigate_incident.ConfigurationReader;
-import use_case.investigate_incident.ConfigurationSnapshot;
+import use_case.shared.ConfigurationReader;
+import use_case.shared.ConfigurationSnapshot;
 import use_case.investigate_incident.RecoveryRecommendationProvider;
 import use_case.monitor_service_health.ObservationStore;
 import use_case.monitor_service_health.ObservationStoreException;
@@ -58,6 +58,7 @@ public final class RecoveryInteractorChecks {
         verificationRequiresAStartedRecovery();
         recoveredTargetIsNotRestarted();
         targetThatRecoversAfterThePreviewIsNotRestarted();
+        dependentIsRecoveredOnceItsDependencyRecovers();
         failingTargetIsStillRestarted();
         unreadableObservationsRunNoOperation();
         System.out.println("UC4 recovery interactor checks passed");
@@ -337,6 +338,30 @@ public final class RecoveryInteractorChecks {
         check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "The incident remains unresolved");
     }
 
+    private static void dependentIsRecoveredOnceItsDependencyRecovers() {
+        Fixture f = new Fixture(true);
+        RecoveryAction apiAction = f.provider.recommend(f.incident, f.configuration, Set.of(f.db.getId())).stream()
+                .filter(action -> action.getTargetServiceId().equals(f.api.getId())).findFirst().orElseThrow();
+
+        f.interactor.previewRecovery(f.incident.getId(), apiAction.getId());
+        check(f.output.previews.isEmpty() && f.output.errors.size() == 1,
+                "While DB is still failing, API is held back and its action is not offered");
+
+        f.observations.passes(f.db, START.plusSeconds(50), 3);
+        f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
+        f.interactor.previewRecovery(f.incident.getId(), apiAction.getId());
+        RecoveryPreview preview = only(f.output.previews);
+        check(preview.getContainerId().equals("api-container")
+                        && preview.getDecision().getOperation().equals(Optional.of(RecoveryOperation.RESTART)),
+                "Once DB has recovered, the still-failing API is offered for recovery");
+        check(preview.getAction().getDescription().contains("have recovered"),
+                "The recommendation explains why API became the target");
+
+        f.interactor.executeRecovery(new RecoveryRequest(f.incident.getId(), apiAction.getId(), true));
+        check(f.containers.operations.equals(List.of("restart:api-container")) && only(f.output.attempts).isSucceeded(),
+                "Confirming restarts API, not the recovered DB");
+    }
+
     private static void targetThatRecoversAfterThePreviewIsNotRestarted() {
         Fixture f = new Fixture();
         f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
@@ -380,11 +405,9 @@ public final class RecoveryInteractorChecks {
         final MonitoringPolicy apiPolicy = new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2);
         final Service db = new Service(UUID.randomUUID(), systemId, "DB",
                 MonitoringTarget.docker("db-container"), dbPolicy);
-        final Service api = new Service(UUID.randomUUID(), systemId, "API",
-                MonitoringTarget.http(URI.create("http://localhost:8080/health")), apiPolicy);
-        final Dependency edge = new Dependency(UUID.randomUUID(), api.getId(), db.getId());
-        final ConfigurationSnapshot configuration = ConfigurationSnapshot.available(
-                new MonitoredSystem(systemId, "Shop", "", List.of(api, db), List.of(edge)));
+        final Service api;
+        final Dependency edge;
+        final ConfigurationSnapshot configuration;
         final RecoveryRecommendationProvider provider = new RecoveryRecommendationProvider();
 
         final FakeIncidents incidents = new FakeIncidents();
@@ -397,6 +420,16 @@ public final class RecoveryInteractorChecks {
         final RecoveryInteractor interactor;
 
         Fixture() {
+            this(false);
+        }
+
+        /** API requires DB; API is an HTTP service unless dockerApi gives it a container too. */
+        Fixture(boolean dockerApi) {
+            api = new Service(UUID.randomUUID(), systemId, "API", dockerApi ? MonitoringTarget.docker("api-container")
+                    : MonitoringTarget.http(URI.create("http://localhost:8080/health")), apiPolicy);
+            edge = new Dependency(UUID.randomUUID(), api.getId(), db.getId());
+            configuration = ConfigurationSnapshot.available(
+                    new MonitoredSystem(systemId, "Shop", "", List.of(api, db), List.of(edge)));
             incident = incidentFailing(db, api);
             incidents.save(incident);
             ConfigurationReader configurations = systemId -> systemId.equals(this.systemId)
@@ -464,10 +497,10 @@ public final class RecoveryInteractorChecks {
         }
 
         @Override
-        public List<Incident> findUnresolvedBySystemId(UUID systemId) {
+        public List<Incident> findBySystemId(UUID systemId) {
             failIfConfigured();
-            return incidents.values().stream().filter(incident -> incident.getSystemId().equals(systemId)
-                    && incident.getStatus() != Incident.Status.RESOLVED).collect(Collectors.toList());
+            return incidents.values().stream().filter(incident -> incident.getSystemId().equals(systemId))
+                    .collect(Collectors.toList());
         }
 
         @Override

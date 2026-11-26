@@ -14,7 +14,6 @@ import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
@@ -24,14 +23,11 @@ import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
-import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Duration;
@@ -42,7 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public final class ConfigurationView extends JFrame implements ConfigurationPresenter.View {
+/** Use Case 1 panel, shown as the Configure tab of the main window. */
+public final class ConfigurationView extends JPanel implements ConfigurationPresenter.View {
     private final JTextField name = new JTextField();
     private final JTextArea description = new JTextArea(2, 28);
     private final JComboBox<String> savedSystems = new JComboBox<>();
@@ -71,20 +68,10 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
     private boolean busy;
 
     public ConfigurationView() {
-        super("Sentinel — Configure a Monitored System");
-        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent event) {
-                if (!busy && confirmDiscard()) {
-                    dispose();
-                }
-            }
-        });
-
+        super(new BorderLayout());
         JPanel content = new JPanel(new BorderLayout(8, 10));
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-        setContentPane(content);
+        add(content, BorderLayout.CENTER);
 
         JPanel systemPicker = new JPanel(new BorderLayout(8, 0));
         JLabel systemLabel = new JLabel("Saved system");
@@ -127,14 +114,16 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
         footer.add(status, BorderLayout.CENTER);
         footer.add(save, BorderLayout.EAST);
         content.add(footer, BorderLayout.SOUTH);
-        getRootPane().setDefaultButton(save);
 
         serviceList.addListSelectionListener(event -> updateActions());
         dependencyList.addListSelectionListener(event -> updateActions());
         setMinimumSize(new Dimension(760, 360));
-        setSize(940, 520);
-        setLocationByPlatform(true);
         openDraft(null);
+    }
+
+    /** Called by the main window before it closes: false while saving or if the user keeps unsaved changes. */
+    public boolean confirmClose() {
+        return !busy && confirmDiscard();
     }
 
     public void connect(ConfigurationController controller) {

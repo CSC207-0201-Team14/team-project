@@ -1,36 +1,35 @@
 package use_case.investigate_incident;
 
 import entity.Dependency;
-import entity.FailureEvent;
-import entity.HealthCheckResult;
-import entity.HealthStatus;
 import entity.Incident;
 import entity.MonitoredSystem;
-import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
 import entity.RecoveryAction;
 import entity.Service;
-import entity.ServiceHealth;
+import use_case.shared.ConfigurationSnapshot;
 import java.net.URI;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static support.Checks.check;
+import static support.TestData.at;
+import static support.TestData.failure;
+import static support.TestData.healthy;
+import static support.TestData.service;
+
 /** Run explicitly after mvn test-compile, following the existing test convention. */
 public final class RecoveryRecommendationChecks {
-    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
     private static final RecoveryRecommendationProvider PROVIDER = new RecoveryRecommendationProvider();
 
     public static void main(String[] args) {
         targetsOnlyTheMostUpstreamFailingContainer();
         givesNoActionWithoutSupportedTarget();
         targetsEveryContainerInAFailingCycle();
+        recoveredServicesStopBlockingDownstreamTargets();
         skipsUnrelatedOrResolvedIncidents();
         System.out.println("UC3 recovery recommendation checks passed");
     }
@@ -61,9 +60,9 @@ public final class RecoveryRecommendationChecks {
 
         Fixture fixture = new Fixture(true, false);
         MonitoredSystem noEdges = new MonitoredSystem(fixture.systemId, "Shop", "", fixture.services, List.of());
-        ConfigurationSnapshot unavailable = ConfigurationSnapshot.dependenciesUnavailable(noEdges, "Graph unavailable");
-        check(PROVIDER.recommend(fixture.incident(fixture.api, fixture.db), unavailable).isEmpty(),
-                "Without dependency information no upstream target can be identified");
+        check(Set.copyOf(targets(PROVIDER.recommend(fixture.incident(fixture.api, fixture.db),
+                        ConfigurationSnapshot.available(noEdges)))).equals(Set.of(fixture.api, fixture.db)),
+                "Without configured dependencies, every failing Docker service is its own most upstream failure");
     }
 
     private static void targetsEveryContainerInAFailingCycle() {
@@ -77,6 +76,38 @@ public final class RecoveryRecommendationChecks {
         check(action.getDescription().contains("cycle"), "The cycle is explained");
     }
 
+    private static void recoveredServicesStopBlockingDownstreamTargets() {
+        Fixture fixture = new Fixture(true, false);
+        Incident incident = fixture.incident(fixture.web, fixture.api, fixture.db);
+        RecoveryAction dbAction = PROVIDER.recommend(incident, fixture.configuration()).get(0);
+
+        List<RecoveryAction> afterDb = PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.db));
+        check(targets(afterDb).equals(List.of(fixture.api, fixture.db).stream().sorted().collect(Collectors.toList())),
+                "Once DB recovers, API is the most upstream service still failing; DB stays for UC4 to judge");
+        RecoveryAction apiAction = afterDb.stream().filter(action -> action.getTargetServiceId().equals(fixture.api))
+                .findFirst().orElseThrow();
+        check(apiAction.getDescription().contains("have recovered, so it is the most upstream service still failing"),
+                "API's description explains why it became a target");
+        check(afterDb.stream().anyMatch(action -> action.getId().equals(dbAction.getId())),
+                "DB keeps its stable action ID");
+
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.db, fixture.api)))
+                        .equals(List.of(fixture.web, fixture.api, fixture.db).stream().sorted()
+                                .collect(Collectors.toList())),
+                "With API recovered too, Web is no longer held back");
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(fixture.api)))
+                        .equals(List.of(fixture.db)),
+                "A recovered service that still requires a failing one is not a target");
+        check(targets(PROVIDER.recommend(incident, fixture.configuration(), Set.of(UUID.randomUUID())))
+                        .equals(List.of(fixture.db)),
+                "IDs outside the incident change nothing");
+
+        Fixture httpDb = new Fixture(false, false);
+        check(targets(PROVIDER.recommend(httpDb.incident(httpDb.api, httpDb.db), httpDb.configuration(),
+                        Set.of(httpDb.db))).equals(List.of(httpDb.api)),
+                "Once an HTTP root cause recovers, its failing Docker dependent can be recovered");
+    }
+
     private static void skipsUnrelatedOrResolvedIncidents() {
         Fixture fixture = new Fixture(true, false);
         Incident incident = fixture.incident(fixture.db);
@@ -84,10 +115,7 @@ public final class RecoveryRecommendationChecks {
         check(PROVIDER.recommend(incident, other.configuration()).isEmpty(),
                 "Configuration from another system is ignored");
 
-        HealthCheckResult passed = new HealthCheckResult(UUID.randomUUID(), fixture.db, START.plusSeconds(20),
-                HealthCheckResult.Outcome.PASS, OptionalLong.empty(), "");
-        Incident resolved = incident.resolve(START.plusSeconds(20), START.plusSeconds(15),
-                Map.of(fixture.db, ServiceHealth.evaluated(HealthStatus.HEALTHY, passed)));
+        Incident resolved = incident.resolve(at(20), at(15), Map.of(fixture.db, healthy(fixture.db, at(20))));
         check(PROVIDER.recommend(resolved, fixture.configuration()).isEmpty(), "Resolved incidents get no actions");
     }
 
@@ -101,12 +129,11 @@ public final class RecoveryRecommendationChecks {
 
         /** WEB -> API -> DB, optionally with DB -> API forming a cycle. */
         private Fixture(boolean dockerDb, boolean cycle) {
-            MonitoringPolicy policy = new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2);
             services = List.of(
-                    new Service(web, systemId, "Web", MonitoringTarget.docker("web-container"), policy),
-                    new Service(api, systemId, "API", MonitoringTarget.docker("api-container"), policy),
-                    new Service(db, systemId, "DB", dockerDb ? MonitoringTarget.docker("db-container")
-                            : MonitoringTarget.http(URI.create("http://db.local/health")), policy));
+                    service(web, systemId, "Web", MonitoringTarget.docker("web-container")),
+                    service(api, systemId, "API", MonitoringTarget.docker("api-container")),
+                    service(db, systemId, "DB", dockerDb ? MonitoringTarget.docker("db-container")
+                            : MonitoringTarget.http(URI.create("http://db.local/health"))));
             dependencies.add(new Dependency(UUID.randomUUID(), web, api));
             dependencies.add(new Dependency(UUID.randomUUID(), api, db));
             if (cycle) {
@@ -121,28 +148,15 @@ public final class RecoveryRecommendationChecks {
         private Incident incident(UUID... failing) {
             Incident incident = null;
             for (int index = 0; index < failing.length; index++) {
-                FailureEvent failure = failure(failing[index], index);
                 incident = incident == null
-                        ? Incident.open(UUID.randomUUID(), systemId, START.plusSeconds(10), failure)
-                        : incident.recordFailure(failure);
+                        ? Incident.open(UUID.randomUUID(), systemId, at(10), failure(failing[index], at(index)))
+                        : incident.recordFailure(failure(failing[index], at(index)));
             }
             return incident;
         }
     }
 
-    private static FailureEvent failure(UUID serviceId, int offset) {
-        HealthCheckResult failed = new HealthCheckResult(UUID.randomUUID(), serviceId, START.plusSeconds(offset),
-                HealthCheckResult.Outcome.FAIL, OptionalLong.empty(), "");
-        return new FailureEvent(UUID.randomUUID(), serviceId, START.plusSeconds(offset), List.of(failed));
-    }
-
     private static List<UUID> targets(List<RecoveryAction> actions) {
         return actions.stream().map(RecoveryAction::getTargetServiceId).collect(Collectors.toList());
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
     }
 }

@@ -7,23 +7,26 @@ import entity.FailureEvent;
 import entity.HealthCheckResult;
 import entity.Incident;
 import entity.MonitoredSystem;
-import entity.MonitoringPolicy;
 import entity.MonitoringTarget;
 import entity.Service;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import support.TestData;
+
+import static support.Checks.check;
+import static support.TestData.at;
 
 /** Run explicitly after mvn test-compile, following the existing test convention. */
 public final class IncidentDiagnosisChecks {
-    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Clock CLOCK = Clock.fixed(START.plusSeconds(100), ZoneOffset.UTC);
+    private static final Clock CLOCK = Clock.fixed(at(100), ZoneOffset.UTC);
     private static final Duration WINDOW = Duration.ofSeconds(60);
 
     public static void main(String[] args) {
@@ -32,6 +35,7 @@ public final class IncidentDiagnosisChecks {
         traversesCyclesAndRetainsAlternatives();
         correlatesConservatively();
         verifiesInteractorWithRealStrategies();
+        handlesRedeliveryAfterResolution();
         System.out.println("UC3 diagnosis checks passed");
     }
 
@@ -69,6 +73,8 @@ public final class IncidentDiagnosisChecks {
         DiagnosticFinding unknown = new ObservedFailureRule(UUID::randomUUID).evaluate(alone).get(0);
         check(unknown.getSuspectedCauseServiceId().isEmpty() && !unknown.getObservationIds().isEmpty(),
                 "Unknown cause retains the observed failure evidence");
+        check(!unknown.getExplanation().contains("No dependencies are configured"),
+                "A system with configured dependencies is not described as having none");
         for (HealthCheckResult.Outcome outcome : List.of(HealthCheckResult.Outcome.PASS,
                 HealthCheckResult.Outcome.MONITORING_ERROR)) {
             DiagnosticSnapshot recovered = fixture.snapshot(List.of(api, db), List.of(result(fixture.db, 90, outcome)));
@@ -82,14 +88,15 @@ public final class IncidentDiagnosisChecks {
                 List.of(result(fixture.db, 70, HealthCheckResult.Outcome.PASS)));
         check(dependencyRule.evaluate(conflict).isEmpty(), "Conflicting same-time outcomes leave the cause uncertain");
         MonitoredSystem roster = new MonitoredSystem(fixture.systemId, "Orders", "", fixture.services, List.of());
-        DiagnosticSnapshot unavailable = new DiagnosticSnapshot(
-                ConfigurationSnapshot.dependenciesUnavailable(roster, "Configuration read failed"),
+        DiagnosticSnapshot noEdges = new DiagnosticSnapshot(ConfigurationSnapshot.available(roster),
                 List.of(api, db), List.of(), CLOCK.instant(), WINDOW);
-        check(dependencyRule.evaluate(unavailable).isEmpty()
-                && new PotentialImpactRule(UUID::randomUUID).evaluate(unavailable).isEmpty(),
-                "Unavailable dependencies disable graph-based conclusions");
-        check(new ObservedFailureRule(UUID::randomUUID).evaluate(unavailable).get(0).getExplanation()
-                .contains("Configuration read failed"), "Unavailable analysis is explained with observed facts retained");
+        check(dependencyRule.evaluate(noEdges).isEmpty()
+                && new PotentialImpactRule(UUID::randomUUID).evaluate(noEdges).isEmpty(),
+                "Without configured dependencies, no graph-based conclusion is drawn");
+        List<DiagnosticFinding> observed = new ObservedFailureRule(UUID::randomUUID).evaluate(noEdges);
+        check(observed.size() == 2 && observed.stream().allMatch(finding -> finding.getExplanation()
+                        .contains("No dependencies are configured for this system")),
+                "3a: the missing dependency analysis is explained while observed failures are kept");
     }
 
     private static void traversesCyclesAndRetainsAlternatives() {
@@ -135,16 +142,16 @@ public final class IncidentDiagnosisChecks {
                 List.of(result(fixture.db, 80, HealthCheckResult.Outcome.PASS)));
         check(!assessment.assess(flapping, fixture.configuration, List.of(db)).getId().equals(db.getId()),
                 "A recovery between same-service failures starts a separate incident");
-        Incident stale = Incident.open(UUID.randomUUID(), fixture.systemId, START.plusSeconds(10), failure(fixture.db, 10));
+        Incident stale = Incident.open(UUID.randomUUID(), fixture.systemId, at(10), failure(fixture.db, 10));
         check(!assessment.assess(fixture.input(apiFailure), fixture.configuration, List.of(stale)).getId().equals(stale.getId()),
                 "Old unresolved evidence cannot support grouping");
         Incident foreign = Incident.open(UUID.randomUUID(), UUID.randomUUID(), CLOCK.instant(), dbFailure);
         check(!assessment.assess(fixture.input(apiFailure), fixture.configuration, List.of(foreign)).getId().equals(foreign.getId()),
                 "Correlation is scoped to the configured system");
         MonitoredSystem roster = new MonitoredSystem(fixture.systemId, "Orders", "", fixture.services, List.of());
-        ConfigurationSnapshot unavailable = ConfigurationSnapshot.dependenciesUnavailable(roster, "Graph unavailable");
-        check(!assessment.assess(fixture.input(apiFailure), unavailable, List.of(db)).getId().equals(db.getId()),
-                "Missing graph cannot support cross-service grouping");
+        check(!assessment.assess(fixture.input(apiFailure), ConfigurationSnapshot.available(roster), List.of(db))
+                        .getId().equals(db.getId()),
+                "Without configured dependencies, failures of different services are not grouped");
         FailureInput errorThenFailure = new FailureInput(fixture.systemId, failure(fixture.db, 90),
                 List.of(result(fixture.db, 80, HealthCheckResult.Outcome.MONITORING_ERROR)));
         Incident afterError = assessment.assess(errorThenFailure, fixture.configuration, List.of(db));
@@ -159,14 +166,14 @@ public final class IncidentDiagnosisChecks {
     private static void verifiesInteractorWithRealStrategies() {
         Fixture fixture = new Fixture();
         InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
-        CapturingOutput output = new CapturingOutput();
-        IncidentInputBoundary boundary = new IncidentInteractor(id -> java.util.Optional.of(fixture.configuration),
-                (services, ids) -> java.util.Map.of(), repository, fixture.assessment(),
+        RecordingOutput output = new RecordingOutput();
+        IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                (services, ids) -> Map.of(), repository, fixture.assessment(),
                 new RecoveryRecommendationProvider(), CLOCK, output);
         FailureInput db = fixture.input(failure(fixture.db, 70));
         boundary.processFailure(db);
-        UUID incidentId = output.incident.getId();
-        check(output.incident.getPotentiallyAffectedServiceIds().equals(Set.of(fixture.api, fixture.web)),
+        UUID incidentId = output.processed.getId();
+        check(output.processed.getPotentiallyAffectedServiceIds().equals(Set.of(fixture.api, fixture.web)),
                 "Potential impact is derived separately from observed failures");
         boundary.processFailure(fixture.input(failure(fixture.api, 80)));
         check(boundary.processFailure(db) == FailureProcessingResult.PROCESSED,
@@ -178,15 +185,34 @@ public final class IncidentDiagnosisChecks {
         check(output.details.getIncident().getStatus() == Incident.Status.INVESTIGATING,
                 "Opening starts investigation without resolving the incident");
         boundary.processFailure(fixture.input(failure(fixture.api, 85)));
-        output.expectError = true;
+        check(output.errors.isEmpty(), "Valid deliveries present no errors");
         check(boundary.processFailure(fixture.input(failure(fixture.api, 150))) == FailureProcessingResult.REJECTED
-                && output.error.startsWith("Failure input could not be assessed"),
+                && output.errors.size() == 1 && output.error.startsWith("Failure input could not be assessed"),
                 "A failure after the assessment time is rejected and presented instead of escaping");
-        output.expectError = false;
         check(repository.findById(incidentId).orElseThrow().getStatus() == Incident.Status.INVESTIGATING
-                && output.incident.getId().equals(incidentId),
+                && output.processed.getId().equals(incidentId),
                 "Later correlated failures keep the incident under investigation");
         check(repository.findUnresolvedBySystemId(fixture.systemId).size() == 1, "Repeated delivery does not duplicate incidents");
+    }
+
+    private static void handlesRedeliveryAfterResolution() {
+        Fixture fixture = new Fixture();
+        InMemoryIncidentRepository repository = new InMemoryIncidentRepository();
+        FailureEvent originalFailure = failure(fixture.db, 50);
+        Incident resolved = Incident.open(UUID.randomUUID(), fixture.systemId, at(50), originalFailure)
+                .resolve(at(70), at(60), Map.of(fixture.db, TestData.healthy(fixture.db, at(70))));
+        repository.save(resolved);
+        RecordingOutput output = new RecordingOutput();
+        IncidentInputBoundary boundary = new IncidentInteractor(id -> Optional.of(fixture.configuration),
+                (services, ids) -> Map.of(), repository, fixture.assessment(),
+                new RecoveryRecommendationProvider(), CLOCK, output);
+        check(boundary.processFailure(fixture.input(originalFailure)) == FailureProcessingResult.PROCESSED
+                && output.processed == resolved && repository.findBySystemId(fixture.systemId).equals(List.of(resolved)),
+                "A replayed failure acknowledges the original resolved incident");
+        check(boundary.processFailure(fixture.input(failure(fixture.db, 95))) == FailureProcessingResult.PROCESSED
+                && output.processed.getStatus() == Incident.Status.OPEN && !output.processed.getId().equals(resolved.getId())
+                && repository.findBySystemId(fixture.systemId).size() == 2,
+                "A new failure on the recovered service opens its own incident");
     }
 
     private static final class Fixture {
@@ -203,8 +229,7 @@ public final class IncidentDiagnosisChecks {
                 new MonitoredSystem(systemId, "Orders", "", services, edges));
 
         private Service service(UUID id, String name) {
-            return new Service(id, systemId, name, MonitoringTarget.docker(name),
-                    new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 2));
+            return TestData.service(id, systemId, name, MonitoringTarget.docker(name));
         }
 
         private FailureInput input(FailureEvent failure) { return new FailureInput(systemId, failure, List.of()); }
@@ -220,34 +245,11 @@ public final class IncidentDiagnosisChecks {
         }
     }
 
-    private static final class CapturingOutput implements IncidentOutputBoundary {
-        private Incident incident;
-        private IncidentDetails details;
-        public void presentProcessed(Incident result) { incident = result; }
-        public void presentDetails(IncidentDetails result) { details = result; }
-        private boolean expectError;
-        private String error;
-        public void presentError(String message) {
-            if (!expectError) {
-                throw new AssertionError(message);
-            }
-            error = message;
-        }
-    }
-
     private static FailureEvent failure(UUID service, long second) {
-        return new FailureEvent(UUID.randomUUID(), service, START.plusSeconds(second),
-                List.of(result(service, second, HealthCheckResult.Outcome.FAIL)));
+        return TestData.failure(service, at(second));
     }
 
     private static HealthCheckResult result(UUID service, long second, HealthCheckResult.Outcome outcome) {
-        return new HealthCheckResult(UUID.randomUUID(), service, START.plusSeconds(second), outcome,
-                OptionalLong.empty(), "Test observation");
-    }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) {
-            throw new AssertionError(message);
-        }
+        return TestData.observation(service, at(second), outcome);
     }
 }

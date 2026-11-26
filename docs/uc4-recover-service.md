@@ -28,9 +28,10 @@ operations. The only operations it can run are `START`, `UNPAUSE` and `RESTART`,
 | | `ContainerRecoveryPolicy`, `RecoveryVerifier` | Pure decision logic with no I/O. |
 | | `ContainerStateReader`, `ContainerOperator`, `RecoveryRecordRepository` | Ports UC4 owns, implemented by outer layers. |
 | | `RecoveryRequest`, `RecoveryPreview`, `RecoveryDecision`, `RecoveryAttemptResult`, `ManualRecoveryGuidance`, `ServiceVerification`, `VerificationResult`, `ResolutionResult`, `ContainerState`, `ContainerAccessException`, `RecoveryOperation` | Immutable input and output data. |
-| Used from other use cases | UC3: `ConfigurationReader`, `ConfigurationSnapshot`, `RecoveryRecommendationProvider` | UC4 re-derives UC3's recommendations rather than trusting a stale list. |
+| Used from other use cases | UC3: `RecoveryRecommendationProvider` | UC4 re-derives UC3's recommendations rather than trusting a stale list. |
 | | UC2: `ObservationStore`, `ObservationStoreException` | UC4 only reads observation history. |
 | | Shared: `IncidentRepository`, `IncidentDataException` | Incident storage shared with UC3. |
+| | Shared: `ConfigurationReader`, `ConfigurationSnapshot` | Read-only system configuration shared with UC3. |
 | Interface adapters | *Planned:* recovery controller, presenter, view model | Presenters must marshal Swing updates onto the EDT. |
 | Frameworks and drivers | *Planned:* Docker Engine adapter (`ContainerStateReader`, `ContainerOperator`), JSON `RecoveryRecordRepository`, Swing view | Not implemented yet. |
 
@@ -85,12 +86,12 @@ classDiagram
     }
     class ConfigurationReader {
         <<interface>>
-        UC3
+        shared
         +findBySystemId(systemId) Optional~ConfigurationSnapshot~
     }
     class RecoveryRecommendationProvider {
         UC3
-        +recommend(Incident, ConfigurationSnapshot) List~RecoveryAction~
+        +recommend(Incident, ConfigurationSnapshot, recoveredServiceIds) List~RecoveryAction~
     }
     class ObservationStore {
         <<interface>>
@@ -241,7 +242,11 @@ sequenceDiagram
     IR-->>I: unresolved incident
     I->>CR: findBySystemId(systemId)
     CR-->>I: configuration
-    I->>RP: recommend(incident, configuration)
+    loop each failing service
+        I->>OS: findByServiceId(serviceId)
+        I->>V: assessSinceLatestFailure(...)
+    end
+    I->>RP: recommend(incident, configuration, recoveredServiceIds)
     RP-->>I: current actions
     Note over I: Match actionId, then resolve the target service and its container ID
     I->>OS: findByServiceId(targetServiceId)
@@ -423,8 +428,5 @@ Compile with `mvn test-compile`, then run each class from the project root, for 
 
 ## Known limitations
 
-- **Recommendations come from history.** UC3 treats any service with a recorded failure as failing. After the
-  root cause recovers, a dependent that is still failing gets no recommendation of its own, and the developer
-  falls back to the manual steps and `beginManualVerification`.
 - **No adapters or UI yet.** The Docker adapter, JSON recovery-record repository, presenter and Swing view
   are still to be built, as is the composition-root wiring.

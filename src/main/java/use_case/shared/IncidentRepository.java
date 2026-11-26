@@ -4,6 +4,7 @@ import entity.Incident;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Incident storage shared by the investigate-incident (UC3) and recover-service (UC4) use cases.
@@ -12,7 +13,14 @@ import java.util.UUID;
 public interface IncidentRepository {
     Optional<Incident> findById(UUID incidentId);
 
-    List<Incident> findUnresolvedBySystemId(UUID systemId);
+    /** Returns every incident for the system, including resolved incidents. */
+    List<Incident> findBySystemId(UUID systemId);
+
+    default List<Incident> findUnresolvedBySystemId(UUID systemId) {
+        return findBySystemId(systemId).stream()
+                .filter(incident -> incident.getStatus() != Incident.Status.RESOLVED)
+                .collect(Collectors.toUnmodifiableList());
+    }
 
     /**
      * Inserts or replaces the complete immutable incident by ID, retaining its history.

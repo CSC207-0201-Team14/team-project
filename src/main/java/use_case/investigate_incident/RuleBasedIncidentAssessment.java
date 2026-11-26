@@ -3,6 +3,7 @@ package use_case.investigate_incident;
 import entity.DiagnosticFinding;
 import entity.FailureEvent;
 import entity.Incident;
+import use_case.shared.ConfigurationSnapshot;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
