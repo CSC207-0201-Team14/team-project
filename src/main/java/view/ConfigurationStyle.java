@@ -6,13 +6,17 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import javax.swing.border.Border;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.LayoutManager;
 import java.awt.RenderingHints;
+import java.awt.Window;
 
 final class ConfigurationStyle {
     static final Color CANVAS = new Color(0xEEF4F4);
@@ -24,6 +28,14 @@ final class ConfigurationStyle {
     static final Color TEAL = new Color(0x16695F);
 
     private ConfigurationStyle() {
+    }
+
+    static void ensureWindowFitsConfiguration(Component component) {
+        Window window = SwingUtilities.getWindowAncestor(component);
+        if (window != null) {
+            Dimension minimum = window.getMinimumSize();
+            window.setMinimumSize(new Dimension(Math.max(minimum.width, 880), Math.max(minimum.height, 480)));
+        }
     }
 
     static JPanel surface(LayoutManager layout) {

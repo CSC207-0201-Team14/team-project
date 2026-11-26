@@ -11,6 +11,8 @@ import use_case.configure_monitored_system.ConfigurationInput;
 import use_case.configure_monitored_system.ServiceInput;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
@@ -125,6 +127,7 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
     }
 
     public void connect(ConfigurationController controller) {
+        ConfigurationStyle.ensureWindowFitsConfiguration(savedSystems);
         savedSystems.addActionListener(event -> selectSavedSystem());
         newSystem.addActionListener(event -> {
             if (confirmDiscard()) {
@@ -211,6 +214,8 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
         JPanel picker = ConfigurationStyle.surface(new BorderLayout(0, 4));
         picker.add(systemLabel, BorderLayout.NORTH);
         picker.add(savedSystems, BorderLayout.CENTER);
+        Dimension pickerMinimum = picker.getMinimumSize();
+        picker.setMinimumSize(new Dimension(Math.max(pickerMinimum.width, 220), pickerMinimum.height));
 
         JPanel systemActions = ConfigurationStyle.surface(new FlowLayout(FlowLayout.TRAILING, 8, 0));
         systemActions.add(newSystem);
@@ -270,12 +275,20 @@ public final class ConfigurationView extends JFrame implements ConfigurationPres
         list.setSelectionForeground(ConfigurationStyle.TEXT);
         section.add(ConfigurationStyle.scroll(list), BorderLayout.CENTER);
 
-        JPanel actions = ConfigurationStyle.surface(new FlowLayout(FlowLayout.LEADING, 8, 7));
-        actions.setBorder(ConfigurationStyle.divider(1, 0));
-        for (JButton button : buttons) {
-            actions.add(button);
+        JPanel actions = ConfigurationStyle.surface(null);
+        actions.setLayout(new BoxLayout(actions, BoxLayout.LINE_AXIS));
+        actions.setBorder(BorderFactory.createCompoundBorder(
+                ConfigurationStyle.divider(1, 0), ConfigurationStyle.inset(7, 8)));
+        for (int i = 0; i < buttons.length; i++) {
+            if (i > 0) {
+                actions.add(Box.createHorizontalStrut(8));
+            }
+            actions.add(buttons[i]);
         }
-        section.setMinimumSize(new Dimension(actions.getPreferredSize().width + 2, 120));
+        actions.add(Box.createHorizontalGlue());
+        Dimension actionSize = actions.getPreferredSize();
+        section.setMinimumSize(new Dimension(Math.max(actionSize.width + 2, 250),
+                heading.getPreferredSize().height + actionSize.height + 58));
         section.add(actions, BorderLayout.SOUTH);
         return section;
     }
