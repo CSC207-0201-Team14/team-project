@@ -2,6 +2,9 @@ package data_access.docker;
 
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import com.sun.net.httpserver.HttpServer;
+import use_case.recover_service.ContainerAccessException;
+import use_case.recover_service.ContainerAccessException.Kind;
+import use_case.recover_service.ContainerState;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -23,10 +26,14 @@ public final class DockerEngineInspectorChecks {
         AtomicReference<String> path = new AtomicReference<>();
         AtomicReference<String> method = new AtomicReference<>();
         AtomicInteger delayMs = new AtomicInteger();
+        AtomicInteger posts = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             path.set(exchange.getRequestURI().getRawPath());
             method.set(exchange.getRequestMethod());
+            if (method.get().equals("POST")) {
+                posts.incrementAndGet();
+            }
             try {
                 if (delayMs.get() > 0) {
                     try {
@@ -38,8 +45,12 @@ public final class DockerEngineInspectorChecks {
                 }
                 byte[] bytes = body.get().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(status.get(), bytes.length);
-                exchange.getResponseBody().write(bytes);
+                if (status.get() == 204) {
+                    exchange.sendResponseHeaders(204, -1);
+                } else {
+                    exchange.sendResponseHeaders(status.get(), bytes.length);
+                    exchange.getResponseBody().write(bytes);
+                }
             } catch (IOException expectedWhenClientTimesOut) {
                 // The timeout check closes its connection before the deliberately delayed response arrives.
             } finally {
@@ -48,8 +59,10 @@ public final class DockerEngineInspectorChecks {
         });
         server.start();
         URI host = URI.create("tcp://127.0.0.1:" + server.getAddress().getPort());
-        DockerEngineInspector inspector = new DockerEngineInspector(timeout -> new ApacheDockerHttpClient.Builder()
-                .dockerHost(host).maxConnections(1).connectionTimeout(timeout).responseTimeout(timeout).build());
+        DockerEngineInspector.TransportFactory transports = timeout -> new ApacheDockerHttpClient.Builder()
+                .dockerHost(host).maxConnections(1).connectionTimeout(timeout).responseTimeout(timeout).build();
+        DockerEngineInspector inspector = new DockerEngineInspector(transports);
+        DockerRecoveryGateway recovery = new DockerRecoveryGateway(inspector, transports, TIMEOUT);
         try {
             DockerInspection inspection = inspector.inspect("test-db", TIMEOUT);
             require(inspection.getState() == DockerInspection.State.RUNNING
@@ -79,17 +92,57 @@ public final class DockerEngineInspectorChecks {
                 expectReadFailure(() -> inspector.inspect("db", TIMEOUT), "Malformed state must not invent health");
             }
             body.set(HEALTHY);
+            require(recovery.inspect("db").getContainerIdentity().orElseThrow().equals("fake-id"),
+                    "Recovery must preserve the canonical ID from inspection");
+            for (int code : new int[]{401, 403}) {
+                status.set(code);
+                expectRecoveryFailure(() -> recovery.inspect("db"), Kind.PERMISSION_DENIED);
+                expectRecoveryFailure(() -> recovery.restart("fake-id"), Kind.PERMISSION_DENIED);
+            }
+            status.set(404);
+            require(recovery.inspect("db").getStatus() == ContainerState.Status.MISSING,
+                    "Recovery distinguishes a missing container from a connection failure");
+            expectRecoveryFailure(() -> recovery.start("fake-id"), Kind.FAILED);
+            status.set(503);
+            int beforeRetryableResponse = posts.get();
+            expectRecoveryFailure(() -> recovery.restart("fake-id"), Kind.FAILED);
+            require(posts.get() == beforeRetryableResponse + 1, "HTTP 503 must not replay a recovery POST");
+            status.set(204);
+            recovery.start("fake-id");
+            require(path.get().endsWith("/start") && method.get().equals("POST"), "START must use Docker POST");
+            recovery.unpause("fake-id");
+            require(path.get().endsWith("/unpause"), "UNPAUSE must use the matching Docker operation");
+            recovery.restart("fake-id");
+            require(path.get().equals("/containers/fake-id/restart"), "RESTART must use the inspected identity");
+            status.set(200);
             delayMs.set(500);
             long started = System.nanoTime();
             expectReadFailure(() -> inspector.inspect("slow", Duration.ofMillis(100)), "Slow responses must time out");
             require(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(3)) < 0,
                     "The configured timeout must prevent an unbounded wait");
+            int before = posts.get();
+            DockerRecoveryGateway fast = new DockerRecoveryGateway(inspector, transports, Duration.ofMillis(150));
+            // Let the single HTTP handler finish the preceding intentionally slow GET.
+            Thread.sleep(500);
+            String result = expectRecoveryFailure(() -> fast.restart("fake-id"), Kind.UNAVAILABLE);
+            require(result.contains("uncertain") && posts.get() == before + 1,
+                    "A timed-out Docker mutation is sent once and reports uncertainty");
         } finally {
             server.stop(0);
         }
         expectReadFailure(() -> inspector.inspect("db", Duration.ofMillis(200)),
                 "An unreachable engine must be reported as an access failure");
         System.out.println("DockerEngineInspectorChecks passed");
+    }
+
+    private static String expectRecoveryFailure(Runnable action, Kind kind) {
+        try {
+            action.run();
+        } catch (ContainerAccessException exception) {
+            require(exception.getKind() == kind, "Expected " + kind + " but saw " + exception.getKind());
+            return exception.getMessage();
+        }
+        throw new AssertionError("Expected Docker recovery error " + kind);
     }
 
     private static void expectReadFailure(Read action, String message) throws Exception {

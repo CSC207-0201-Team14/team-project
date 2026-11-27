@@ -41,11 +41,10 @@ public final class DockerEngineInspector implements DockerInspector {
         if (containerId.isBlank() || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("Container ID and positive timeout are required");
         }
-        String encodedId = URLEncoder.encode(containerId, StandardCharsets.UTF_8).replace("+", "%20");
         // Unversioned Engine requests use the daemon's current API. Decode only stable inspect fields.
         DockerHttpClient.Request request = DockerHttpClient.Request.builder()
                 .method(DockerHttpClient.Request.Method.GET)
-                .path("/containers/" + encodedId + "/json")
+                .path(containerPath(containerId, "json"))
                 .build();
         try (DockerHttpClient client = transports.open(timeout);
              DockerHttpClient.Response response = client.execute(request)) {
@@ -53,9 +52,7 @@ public final class DockerEngineInspector implements DockerInspector {
             if (status == 404) {
                 return DockerInspection.missing();
             }
-            if (status == 401 || status == 403) {
-                throw new IOException("Docker Engine denied permission to inspect the container (HTTP " + status + ")");
-            }
+            requirePermission(status);
             if (status != 200) {
                 throw new IOException("Docker Engine could not inspect the container (HTTP " + status + ")");
             }
@@ -74,7 +71,8 @@ public final class DockerEngineInspector implements DockerInspector {
     }
 
     private static DockerInspection decode(JsonObject json) {
-        if (JsonCodec.readString(json, "Id").isBlank()) {
+        String containerId = JsonCodec.readString(json, "Id");
+        if (containerId.isBlank()) {
             throw new IllegalArgumentException("Missing container identity in inspect response");
         }
         JsonObject state = json.getAsJsonObject("State");
@@ -92,10 +90,27 @@ public final class DockerEngineInspector implements DockerInspector {
             health = DockerInspection.Health.valueOf(JsonCodec.readString(state.getAsJsonObject("Health"), "Status")
                     .toUpperCase(Locale.ROOT));
         }
-        return new DockerInspection(lifecycle, health, state.get("OOMKilled").getAsBoolean());
+        return new DockerInspection(lifecycle, health, state.get("OOMKilled").getAsBoolean(), containerId);
     }
 
-    private static DockerHttpClient defaultTransport(Duration timeout) {
+    static String containerPath(String containerId, String operation) {
+        String encodedId = URLEncoder.encode(containerId, StandardCharsets.UTF_8).replace("+", "%20");
+        return "/containers/" + encodedId + "/" + operation;
+    }
+
+    static void requirePermission(int status) throws DockerPermissionException {
+        if (status == 401 || status == 403) {
+            throw new DockerPermissionException(status);
+        }
+    }
+
+    static final class DockerPermissionException extends IOException {
+        private DockerPermissionException(int status) {
+            super("Docker Engine denied permission (HTTP " + status + ")");
+        }
+    }
+
+    static DockerHttpClient defaultTransport(Duration timeout) {
         DefaultDockerClientConfig.Builder builder = DefaultDockerClientConfig.createDefaultConfigBuilder();
         String override = System.getProperty("sentinel.docker.host");
         if (override != null && !override.isBlank()) {
