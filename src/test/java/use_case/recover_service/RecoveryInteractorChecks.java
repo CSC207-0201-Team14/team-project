@@ -320,6 +320,11 @@ public final class RecoveryInteractorChecks {
         Fixture f = new Fixture();
         f.observations.passes(f.db, START.plusSeconds(50), 3);
         f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
+        VerifiedRecoveryRecommendations recommendations = new VerifiedRecoveryRecommendations(
+                f.provider, f.observations, new RecoveryVerifier(), f.clock);
+        check(recommendations.recommend(f.incident, f.configuration).stream()
+                        .map(RecoveryAction::getTargetServiceId).toList().equals(List.of(f.api.getId())),
+                "The incident recommendation query skips the recovered DB and promotes the failing API");
 
         f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
         RecoveryPreview preview = only(f.output.previews);
@@ -349,6 +354,11 @@ public final class RecoveryInteractorChecks {
 
         f.observations.passes(f.db, START.plusSeconds(50), 3);
         f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
+        VerifiedRecoveryRecommendations recommendations = new VerifiedRecoveryRecommendations(
+                f.provider, f.observations, new RecoveryVerifier(), f.clock);
+        check(recommendations.recommend(f.incident, f.configuration).stream()
+                        .map(RecoveryAction::getTargetServiceId).toList().equals(List.of(f.api.getId())),
+                "The incident recommendation query skips the recovered DB and promotes the failing API");
         f.interactor.previewRecovery(f.incident.getId(), apiAction.getId());
         RecoveryPreview preview = only(f.output.previews);
         check(preview.getContainerId().equals("api-container")

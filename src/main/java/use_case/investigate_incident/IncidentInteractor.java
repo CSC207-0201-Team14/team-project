@@ -25,13 +25,13 @@ public final class IncidentInteractor implements IncidentInputBoundary {
     private final ObservationReader observations;
     private final IncidentRepository incidents;
     private final IncidentAssessment assessment;
-    private final RecoveryRecommendationProvider recommendations;
+    private final IncidentRecoveryRecommendations recommendations;
     private final Clock clock;
     private final IncidentOutputBoundary output;
 
     public IncidentInteractor(ConfigurationReader configurations, ObservationReader observations,
                               IncidentRepository incidents, IncidentAssessment assessment,
-                              RecoveryRecommendationProvider recommendations, Clock clock,
+                              IncidentRecoveryRecommendations recommendations, Clock clock,
                               IncidentOutputBoundary output) {
         this.configurations = configurations;
         this.observations = observations;

@@ -10,7 +10,6 @@ import entity.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +38,7 @@ import use_case.shared.IncidentRepository;
 public final class RecoveryInteractor implements RecoveryInputBoundary {
     private final IncidentRepository incidents;
     private final ConfigurationReader configurations;
-    private final RecoveryRecommendationProvider recommendations;
+    private final VerifiedRecoveryRecommendations recommendations;
     private final ContainerStateReader containerStates;
     private final ContainerOperator containers;
     private final RecoveryRecordRepository records;
@@ -58,7 +57,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
                               RecoveryOutputBoundary output) {
         this.incidents = Objects.requireNonNull(incidents, "incidents");
         this.configurations = Objects.requireNonNull(configurations, "configurations");
-        this.recommendations = Objects.requireNonNull(recommendations, "recommendations");
+        this.recommendations = new VerifiedRecoveryRecommendations(recommendations, observations, verifier, clock);
         this.containerStates = Objects.requireNonNull(containerStates, "containerStates");
         this.containers = Objects.requireNonNull(containers, "containers");
         this.records = Objects.requireNonNull(records, "records");
@@ -282,8 +281,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
             output.presentError("Monitored system was not found");
             return Optional.empty();
         }
-        List<RecoveryAction> recommended = recommendations.recommend(incident, configuration.get(),
-                recoveredServices(incident, configuration.get()));
+        List<RecoveryAction> recommended = recommendations.recommend(incident, configuration.get());
         Optional<RecoveryAction> action = recommended.stream()
                 .filter(candidate -> candidate.getId().equals(actionId)).findFirst();
         if (action.isEmpty()) {
@@ -305,22 +303,6 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
             return Optional.empty();
         }
         return Optional.of(new Target(incident, action.get(), service.get(), containerId.get()));
-    }
-
-    /**
-     * Failing services whose checks since their latest recorded failure meet their recovery threshold.
-     * UC3 then stops treating them as blocking, so a service still failing downstream can be recovered.
-     */
-    private Set<UUID> recoveredServices(Incident incident, ConfigurationSnapshot configuration) {
-        Instant now = clock.instant();
-        Set<UUID> recovered = new HashSet<>();
-        for (Service service : configuration.getSystem().getServices()) {
-            if (incident.getFailingServiceIds().contains(service.getId()) && verifier.assessSinceLatestFailure(
-                    incident, service, history(service.getId()), now).isVerified()) {
-                recovered.add(service.getId());
-            }
-        }
-        return recovered;
     }
 
     private Optional<Incident> findUnresolved(UUID incidentId) {
