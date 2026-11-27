@@ -229,13 +229,16 @@ Requires JDK 11 or later and Maven. Run every command from the project root.
 **Start the desktop app:**
 
 ```
-mvn compile exec:java -Dexec.mainClass=app.Sentinel
+mvn compile exec:java "-Dexec.mainClass=app.Sentinel"
 ```
 
 The window has one tab per use case: Configure (UC1), Monitor (UC2), Incidents (UC3) and Recover (UC4).
-Monitor and Recover are placeholders in this version. Configurations and incidents are saved under `~/.sentinel`.
+Monitor supports single and periodic HTTP/Docker checks for selected saved services. Recover remains a
+placeholder in this version. Configurations, observations and incidents are saved under `~/.sentinel`.
+Docker checks require a running Docker Desktop/Engine; HTTP checks can run independently. See the
+[UC2 architecture document](docs/uc2-service-health-monitoring.md) for outcome rules, persistence and setup.
 
-**Run the checks:** the tests are plain `main` programs. Compile them and copy Gson next to the classes once:
+**Run the checks:** the tests are plain `main` programs. Compile them and copy the runtime dependencies next to the classes:
 
 ```
 mvn test-compile dependency:copy-dependencies
@@ -252,5 +255,6 @@ Then run any check class, for example the UC3 suite:
 
 ### Additional resources
 
+- [UC2: Monitor Service Health — Architecture](docs/uc2-service-health-monitoring.md)
 - [UC3: Investigate an Incident — Architecture](docs/uc3-investigate-incident.md)
 - [UC4: Recover a Service and Verify Resolution — Architecture](docs/uc4-recover-service.md)
