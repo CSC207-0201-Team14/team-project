@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /** Recalculates the eligible upstream failures using fresh monitoring evidence. */
 public final class VerifiedRecoveryRecommendations implements IncidentRecoveryRecommendations {
@@ -45,7 +46,9 @@ public final class VerifiedRecoveryRecommendations implements IncidentRecoveryRe
                 recovered.add(service.getId());
             }
         }
-        return provider.recommend(incident, configuration, recovered);
+        return provider.recommend(incident, configuration, recovered).stream()
+                .filter(action -> !recovered.contains(action.getTargetServiceId()))
+                .collect(Collectors.toUnmodifiableList());
     }
 
     ServiceVerification assess(Incident incident, Service service, Instant now) {

@@ -10,6 +10,7 @@ import entity.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -17,12 +18,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import use_case.shared.ConfigurationReader;
 import use_case.shared.ConfigurationSnapshot;
-import use_case.investigate_incident.RecoveryRecommendationProvider;
 import use_case.monitor_service_health.ObservationStore;
 import use_case.monitor_service_health.ObservationStoreException;
 import use_case.shared.IncidentDataException;
@@ -48,16 +51,22 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
     private final Clock clock;
     private final Supplier<UUID> attemptIds;
     private final RecoveryOutputBoundary output;
+    private final Executor incidentWorker;
+    private final Executor dockerWorker;
+    private final Set<UUID> executing = new HashSet<>();
+    private RecoveryPreview pendingPreview;
 
     public RecoveryInteractor(IncidentRepository incidents, ConfigurationReader configurations,
-                              RecoveryRecommendationProvider recommendations, ContainerStateReader containerStates,
+                              VerifiedRecoveryRecommendations recommendations, ContainerStateReader containerStates,
                               ContainerOperator containers, RecoveryRecordRepository records,
                               ObservationStore observations, ContainerRecoveryPolicy policy,
                               RecoveryVerifier verifier, Clock clock, Supplier<UUID> attemptIds,
-                              RecoveryOutputBoundary output) {
+                              RecoveryOutputBoundary output, Executor incidentWorker, Executor dockerWorker) {
+        this.incidentWorker = Objects.requireNonNull(incidentWorker, "incidentWorker");
+        this.dockerWorker = Objects.requireNonNull(dockerWorker, "dockerWorker");
         this.incidents = Objects.requireNonNull(incidents, "incidents");
         this.configurations = Objects.requireNonNull(configurations, "configurations");
-        this.recommendations = new VerifiedRecoveryRecommendations(recommendations, observations, verifier, clock);
+        this.recommendations = Objects.requireNonNull(recommendations, "recommendations");
         this.containerStates = Objects.requireNonNull(containerStates, "containerStates");
         this.containers = Objects.requireNonNull(containers, "containers");
         this.records = Objects.requireNonNull(records, "records");
@@ -70,120 +79,188 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
     }
 
     @Override
-    public void previewRecovery(UUID incidentId, UUID actionId) {
-        Objects.requireNonNull(incidentId, "incidentId");
-        Objects.requireNonNull(actionId, "actionId");
-        try {
-            Optional<Target> found = findTarget(incidentId, actionId);
-            if (found.isEmpty()) {
-                return;
-            }
-            Target target = found.get();
-            ServiceVerification targetHealth = assessTarget(target);
-            ContainerState state;
-            try {
-                state = containerStates.inspect(target.containerId);
-            } catch (ContainerAccessException exception) {
-                output.presentError("Could not inspect container " + target.containerId + ": "
-                        + exception.getMessage());
-                output.presentManualSteps(guidance(target.incident,
-                        "The container state is unavailable, so Sentinel cannot choose a recovery operation."));
-                return;
-            }
-            output.presentPreview(new RecoveryPreview(target.action, target.service.getName(), target.containerId,
-                    state, targetHealth, policy.select(state, targetHealth), manualSteps(target.incident)));
-        } catch (IncidentDataException exception) {
-            output.presentError(exception.getMessage());
+    public CompletableFuture<Void> previewRecovery(UUID incidentId, UUID actionId) {
+        return submit(() -> {
+            pendingPreview = null;
+            return preview(incidentId, actionId);
+        });
+    }
+
+    private CompletableFuture<Void> preview(UUID incidentId, UUID actionId) {
+        Optional<Target> found = findTarget(incidentId, actionId);
+        if (found.isEmpty()) {
+            return done();
         }
+        Target target = found.get();
+        return inspect(target).handleAsync((state, error) -> {
+            if (error != null) {
+                output.presentError("Could not inspect container " + target.containerId + ": " + cause(error).getMessage());
+                output.presentManualSteps(guidance(target.incident, "Docker state is unavailable."));
+            } else {
+                showPreview(target, state, assessTarget(target));
+            }
+            return null;
+        }, incidentWorker);
     }
 
     @Override
-    public void executeRecovery(RecoveryRequest request) {
-        Objects.requireNonNull(request, "request");
-        if (!request.isConfirmed()) {
-            output.presentError("Recovery was not confirmed, so no action was taken.");
-            return;
+    public CompletableFuture<Void> executeRecovery(RecoveryRequest request) {
+        return submit(() -> execute(request));
+    }
+
+    private CompletableFuture<Void> execute(RecoveryRequest request) {
+        if (request.getPreview() != pendingPreview) {
+            output.presentError("Confirm a current recovery preview before running a Docker operation.");
+            return done();
         }
-        try {
-            Optional<Target> found = findTarget(request.getIncidentId(), request.getActionId());
-            if (found.isEmpty()) {
-                return;
+        UUID incidentId = request.getIncidentId();
+        if (executing.contains(incidentId)) {
+            output.presentError("Recovery is already running for this incident.");
+            return done();
+        }
+        RecoveryPreview confirmed = pendingPreview;
+        pendingPreview = null;
+        Optional<Target> found = findTarget(incidentId, request.getActionId());
+        if (found.isEmpty()) {
+            return done();
+        }
+        // Surface unreadable history before sending a mutation to Docker.
+        records.findByIncidentId(incidentId);
+        Target target = found.get();
+        Instant startedAt = clock.instant();
+        executing.add(incidentId);
+        return inspect(target).handleAsync((state, error) -> {
+            Optional<Target> current = findTarget(incidentId, request.getActionId());
+            if (current.isEmpty()) {
+                return done();
             }
-            Target target = found.get();
-            // Re-assessed rather than trusted from the preview: the target may have recovered since.
-            ServiceVerification targetHealth = assessTarget(target);
-            Instant startedAt = clock.instant();
-
-            ContainerState state;
-            try {
-                state = containerStates.inspect(target.containerId);
-            } catch (ContainerAccessException exception) {
-                record(target, startedAt, Optional.empty(), Optional.empty(), outcomeOf(exception),
-                        "Could not inspect container " + target.containerId + "; no operation was performed: "
-                                + exception.getMessage());
-                return;
+            Target latest = current.get();
+            if (!latest.containerId.equals(target.containerId)) {
+                return preview(incidentId, request.getActionId());
             }
-
+            if (error != null) {
+                Throwable failure = cause(error);
+                record(latest, startedAt, Optional.empty(), Optional.empty(), outcomeOf(failure),
+                        "Could not inspect container " + latest.containerId + "; no operation was performed: "
+                                + failure.getMessage());
+                return done();
+            }
+            ServiceVerification targetHealth = assessTarget(latest);
             RecoveryDecision decision = policy.select(state, targetHealth);
             if (decision.getOperation().isEmpty()) {
-                output.presentManualSteps(guidance(target.incident, decision.getExplanation()));
-                return;
+                output.presentManualSteps(guidance(latest.incident, decision.getExplanation()));
+                return done();
             }
-            RecoveryOperation operation = decision.getOperation().get();
-            RecoveryAttempt.Outcome outcome;
-            String message;
-            try {
-                run(operation, target.containerId);
-                outcome = RecoveryAttempt.Outcome.SUCCEEDED;
-                message = describe(operation, target.containerId, state) + " succeeded.";
-            } catch (ContainerAccessException exception) {
-                outcome = outcomeOf(exception);
-                message = describe(operation, target.containerId, state) + " failed: " + exception.getMessage();
-            } catch (RuntimeException exception) {
-                outcome = RecoveryAttempt.Outcome.FAILED;
-                message = describe(operation, target.containerId, state) + " failed unexpectedly: "
-                        + exception.getMessage();
+            RecoveryOperation operation = decision.getOperation().orElseThrow();
+            if (!matches(confirmed, latest, state, operation)) {
+                showPreview(latest, state, targetHealth);
+                return done();
             }
-            boolean saved = record(target, startedAt, Optional.of(state), Optional.of(operation), outcome, message);
-            if (saved && outcome == RecoveryAttempt.Outcome.SUCCEEDED) {
-                verify(target.incident.getId());
-            }
-        } catch (IncidentDataException exception) {
-            output.presentError(exception.getMessage());
+            return operate(latest, state, operation, startedAt);
+        }, incidentWorker).thenCompose(Function.identity())
+                .whenCompleteAsync((ignored, failure) -> executing.remove(incidentId), incidentWorker);
+    }
+
+    private CompletableFuture<ContainerState> inspect(Target target) {
+        return CompletableFuture.supplyAsync(() -> containerStates.inspect(target.containerId), dockerWorker);
+    }
+
+    private CompletableFuture<Void> operate(Target target, ContainerState state, RecoveryOperation operation,
+                                            Instant startedAt) {
+        String identity = state.getContainerIdentity().orElseThrow();
+        String description = describe(operation, identity, state);
+        return CompletableFuture.runAsync(() -> run(operation, identity), dockerWorker)
+                .handleAsync((ignored, error) -> {
+                    Throwable failure = error == null ? null : cause(error);
+                    RecoveryAttempt.Outcome outcome = failure == null ? RecoveryAttempt.Outcome.SUCCEEDED
+                            : outcomeOf(failure);
+                    String message = failure == null ? description + " succeeded."
+                            : description + " failed. " + failure.getMessage();
+                    boolean saved = record(target, startedAt, Optional.of(state), Optional.of(operation), outcome,
+                            message);
+                    if (saved && failure == null) {
+                        verify(target.incident.getId());
+                    }
+                    return null;
+                }, incidentWorker);
+    }
+
+    private CompletableFuture<Void> submit(Supplier<CompletableFuture<Void>> work) {
+        return CompletableFuture.supplyAsync(work, incidentWorker).thenCompose(Function.identity())
+                .exceptionallyAsync(error -> {
+                    Throwable failure = cause(error);
+                    output.presentError(failure.getMessage() == null ? "Recovery could not complete." : failure.getMessage());
+                    return null;
+                }, incidentWorker);
+    }
+
+    private static CompletableFuture<Void> done() {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private static Throwable cause(Throwable error) {
+        return error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+    }
+
+    private void showPreview(Target target, ContainerState state, ServiceVerification targetHealth) {
+        RecoveryDecision decision = policy.select(state, targetHealth);
+        if (decision.isSupported() && state.getContainerIdentity().isEmpty()) {
+            output.presentManualSteps(guidance(target.incident, "Docker did not report a container identity."));
+            return;
         }
+        RecoveryPreview preview = new RecoveryPreview(target.action, target.service.getName(), target.containerId,
+                state, targetHealth, decision, manualSteps(target.incident));
+        pendingPreview = preview;
+        output.presentPreview(preview);
+    }
+
+    private static boolean matches(RecoveryPreview approved, Target target, ContainerState state,
+                                   RecoveryOperation operation) {
+        return approved.getAction().getTargetServiceId().equals(target.service.getId())
+                && approved.getContainerId().equals(target.containerId)
+                && state.getContainerIdentity().isPresent()
+                && approved.getState().getContainerIdentity().equals(state.getContainerIdentity())
+                && approved.getDecision().getOperation().filter(operation::equals).isPresent();
     }
 
     @Override
-    public void beginManualVerification(UUID incidentId) {
-        Objects.requireNonNull(incidentId, "incidentId");
-        try {
-            Optional<Incident> incident = findUnresolved(incidentId);
-            if (incident.isEmpty()) {
-                return;
+    public CompletableFuture<Void> beginManualVerification(UUID incidentId) {
+        return submit(() -> {
+            if (availableForVerification(incidentId) && findUnresolved(incidentId).isPresent()) {
+                IncidentRecoveryRecord record = records.findByIncidentId(incidentId)
+                        .orElse(IncidentRecoveryRecord.empty(incidentId));
+                records.save(record.beginManualVerification(clock.instant()));
+                verify(incidentId);
             }
-            IncidentRecoveryRecord record = records.findByIncidentId(incidentId)
-                    .orElse(IncidentRecoveryRecord.empty(incidentId));
-            try {
-                record = record.beginManualVerification(clock.instant());
-            } catch (IllegalArgumentException exception) {
-                output.presentError("Verification could not be started: " + exception.getMessage());
-                return;
-            }
-            records.save(record);
-            verify(incidentId);
-        } catch (IncidentDataException exception) {
-            output.presentError(exception.getMessage());
-        }
+            return done();
+        });
     }
 
     @Override
-    public void verifyResolution(UUID incidentId) {
-        Objects.requireNonNull(incidentId, "incidentId");
-        try {
-            verify(incidentId);
-        } catch (IncidentDataException exception) {
-            output.presentError(exception.getMessage());
+    public CompletableFuture<Void> verifyResolution(UUID incidentId) {
+        return submit(() -> {
+            if (availableForVerification(incidentId)) {
+                verify(incidentId);
+            }
+            return done();
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> loadHistory(UUID incidentId) {
+        return submit(() -> {
+            output.presentHistory(records.findByIncidentId(incidentId)
+                    .orElseGet(() -> IncidentRecoveryRecord.empty(incidentId)));
+            return done();
+        });
+    }
+
+    private boolean availableForVerification(UUID incidentId) {
+        if (executing.contains(incidentId)) {
+            output.presentError("Wait for the current recovery attempt to finish before verifying recovery.");
+            return false;
         }
+        return true;
     }
 
     private void verify(UUID incidentId) {
@@ -230,8 +307,7 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
 
     /** The target's health from checks since its latest recorded failure; decides whether a restart is warranted. */
     private ServiceVerification assessTarget(Target target) {
-        return verifier.assessSinceLatestFailure(target.incident, target.service, history(target.service.getId()),
-                clock.instant());
+        return recommendations.assess(target.incident, target.service, clock.instant());
     }
 
     /**
@@ -334,8 +410,9 @@ public final class RecoveryInteractor implements RecoveryInputBoundary {
         }
     }
 
-    private static RecoveryAttempt.Outcome outcomeOf(ContainerAccessException exception) {
-        return exception.getKind() == ContainerAccessException.Kind.PERMISSION_DENIED
+    private static RecoveryAttempt.Outcome outcomeOf(Throwable exception) {
+        return exception instanceof ContainerAccessException
+                && ((ContainerAccessException) exception).getKind() == ContainerAccessException.Kind.PERMISSION_DENIED
                 ? RecoveryAttempt.Outcome.PERMISSION_DENIED
                 : RecoveryAttempt.Outcome.FAILED;
     }
