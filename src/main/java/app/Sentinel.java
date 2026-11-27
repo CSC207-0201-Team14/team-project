@@ -1,7 +1,13 @@
 package app;
 
 import data_access.configuration.JsonConfigurationRepository;
+import data_access.http.HttpHealthChecker;
+import data_access.docker.DockerEngineInspector;
+import data_access.docker.DockerHealthChecker;
+import data_access.monitoring.TargetHealthChecker;
+import data_access.persistence.JsonObservationStore;
 import data_access.persistence.JsonIncidentRepository;
+import infrastructure.scheduling.ExecutorMonitoringScheduler;
 import infrastructure.scheduling.SingleThreadIncidentWorker;
 import interface_adapter.configuration.ConfigurationController;
 import interface_adapter.configuration.ConfigurationPresenter;
@@ -11,8 +17,11 @@ import interface_adapter.investigate_incident.IncidentPresenter;
 import interface_adapter.investigate_incident.IncidentViewModel;
 import interface_adapter.investigate_incident.InvestigateIncidentController;
 import interface_adapter.investigate_incident.ObservationLookupReader;
-import entity.HealthCheckResult;
+import interface_adapter.monitor_service_health.MonitoringController;
+import interface_adapter.monitor_service_health.MonitoringPresenter;
+import interface_adapter.monitor_service_health.MonitoringViewModel;
 import entity.MonitoredSystem;
+import entity.Service;
 import use_case.configure_monitored_system.ConfigurationInteractor;
 import use_case.configure_monitored_system.ConfigurationRepository;
 import use_case.investigate_incident.DependencyFailureRule;
@@ -27,6 +36,11 @@ import use_case.investigate_incident.RecoveryRecommendationProvider;
 import use_case.investigate_incident.RuleBasedIncidentAssessment;
 import use_case.investigate_incident.SerializedIncidentInputBoundary;
 import use_case.monitor_service_health.FailureEventListener;
+import use_case.monitor_service_health.MonitoringInteractor;
+import use_case.monitor_service_health.MonitoringInputBoundary;
+import use_case.monitor_service_health.MonitoringOutputBoundary;
+import use_case.monitor_service_health.MonitoringSessionInputBoundary;
+import use_case.monitor_service_health.MonitoringSessionInteractor;
 import use_case.monitor_service_health.ObservationLookup;
 import use_case.monitor_service_health.ObservationStore;
 import use_case.shared.IncidentRepository;
@@ -34,6 +48,7 @@ import view.ConfigurationView;
 import view.IncidentView;
 import view.PlaceholderPanel;
 import view.SentinelWindow;
+import view.monitor_service_health.MonitoringView;
 
 import javax.swing.SwingUtilities;
 import java.nio.file.Path;
@@ -43,10 +58,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Sentinel implements AutoCloseable {
     private static final Duration EVIDENCE_WINDOW = Duration.ofSeconds(60);
@@ -55,10 +70,15 @@ public final class Sentinel implements AutoCloseable {
     private final Clock clock;
     /** Owned here: shared by every use case that reads or writes incidents, and closed with the application. */
     private final SingleThreadIncidentWorker incidentWorker = new SingleThreadIncidentWorker();
+    private final ExecutorMonitoringScheduler monitoringScheduler = new ExecutorMonitoringScheduler();
+    private final JsonObservationStore observations;
+    private MonitoringApplication monitoring;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public Sentinel(Path dataDirectory, Clock clock) {
         this.configurations = new JsonConfigurationRepository(dataDirectory.resolve("systems"));
         this.incidents = new JsonIncidentRepository(dataDirectory.resolve("incidents"));
+        this.observations = new JsonObservationStore(dataDirectory.resolve("observations"));
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -73,17 +93,19 @@ public final class Sentinel implements AutoCloseable {
 
         IncidentViewModel incidentViewModel = new IncidentViewModel();
         IncidentView incidentView = new IncidentView(incidentViewModel);
-        // UC2's observation store is not part of main yet, so nothing creates incidents in the desktop app and
-        // evidence outside each failure event is reported as unavailable rather than invented.
-        IncidentInvestigation investigation = wireInvestigateIncident(MonitoringNotConnected.INSTANCE,
-                MonitoringNotConnected.INSTANCE, new IncidentPresenter(incidentViewModel));
-        incidentView.connect(new InvestigateIncidentController(investigation.getInvestigation()));
+        MonitoringViewModel monitoringViewModel = new MonitoringViewModel();
+        MonitoringPresenter monitoringPresenter = new MonitoringPresenter(monitoringViewModel);
+        MonitoringApplication runtime = wireMonitoring(monitoringPresenter, new IncidentPresenter(incidentViewModel));
+        MonitoringController monitoringController = new MonitoringController(runtime.getChecks(),
+                runtime.getSessions(), monitoringPresenter);
+        MonitoringView monitoringView = new MonitoringView(monitoringController, monitoringViewModel);
+        incidentView.connect(new InvestigateIncidentController(runtime.getInvestigation().getInvestigation()));
 
         ConfigurationInteractor configuration = new ConfigurationInteractor(configurations,
-                new ConfigurationPresenter(sharedSystemList(configurationView, incidentView)));
+                new ConfigurationPresenter(sharedSystemList(configurationView, incidentView, monitoringView)));
 
         SentinelWindow window = new SentinelWindow(configurationView,
-                new PlaceholderPanel("Monitor service health"), incidentView,
+                monitoringView, incidentView,
                 new PlaceholderPanel("Recover a service and verify resolution"),
                 configurationView::confirmClose,
                 () -> {
@@ -99,7 +121,8 @@ public final class Sentinel implements AutoCloseable {
      * system picker, so UC3 does not need its own query for configured systems.
      */
     private static ConfigurationPresenter.View sharedSystemList(ConfigurationView configurationView,
-                                                                IncidentView incidentView) {
+                                                                IncidentView incidentView,
+                                                                MonitoringView monitoringView) {
         return new ConfigurationPresenter.View() {
             @Override
             public void showSystems(List<MonitoredSystem> systems, List<String> skippedFiles) {
@@ -107,12 +130,14 @@ public final class Sentinel implements AutoCloseable {
                 Map<UUID, String> names = new LinkedHashMap<>();
                 systems.forEach(system -> names.put(system.getId(), system.getName()));
                 incidentView.showSystems(names);
+                monitoringView.showSystems(systems);
             }
 
             @Override
             public void showSaved(MonitoredSystem system) {
                 configurationView.showSaved(system);
                 incidentView.showSavedSystem(system.getId(), system.getName());
+                monitoringView.showSavedSystem(system);
             }
 
             @Override
@@ -120,6 +145,26 @@ public final class Sentinel implements AutoCloseable {
                 configurationView.showError(message);
             }
         };
+    }
+
+    /** Builds UC2 and UC3 with one observation store and one clock. Call checks off the EDT. */
+    public MonitoringApplication wireMonitoring(MonitoringOutputBoundary monitoringOutput,
+                                                IncidentOutputBoundary incidentOutput) {
+        if (closed.get()) {
+            throw new IllegalStateException("The application is closed");
+        }
+        if (monitoring != null) {
+            throw new IllegalStateException("Monitoring has already been wired");
+        }
+        IncidentInvestigation investigation = wireInvestigateIncident(observations, observations, incidentOutput);
+        TargetHealthChecker checker = new TargetHealthChecker(new HttpHealthChecker(clock),
+                new DockerHealthChecker(new DockerEngineInspector(), clock));
+        MonitoringExecution checks = new MonitoringExecution(new MonitoringInteractor(checker, observations,
+                monitoringOutput, investigation.getFailureListener()));
+        MonitoringSessionInteractor sessions = new MonitoringSessionInteractor(checks, monitoringScheduler,
+                monitoringOutput);
+        monitoring = new MonitoringApplication(checks, sessions, investigation);
+        return monitoring;
     }
 
     /**
@@ -144,30 +189,66 @@ public final class Sentinel implements AutoCloseable {
 
     @Override
     public void close() {
-        incidentWorker.close();
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        if (monitoring != null) {
+            monitoring.checks.stopAccepting();
+            monitoring.getSessions().stopAll();
+        }
+        monitoringScheduler.close();
+        if (monitoring == null) {
+            incidentWorker.close();
+        } else {
+            // A running check may still deliver an incident. Let it finish before closing UC3's worker,
+            // without blocking the EDT. Queued checks will see stopAccepting and do nothing.
+            new Thread(() -> {
+                monitoring.checks.awaitCurrentCheck();
+                incidentWorker.close();
+            }, "monitoring-shutdown").start();
+        }
     }
 
-    /**
-     * Stands in for UC2's observation store until its outer layers are wired: no history, so the incident
-     * panel lists stored incidents and marks evidence it cannot load as unavailable.
-     */
-    private enum MonitoringNotConnected implements ObservationStore, ObservationLookup {
-        INSTANCE;
+    private static final class MonitoringExecution implements MonitoringInputBoundary {
+        private final MonitoringInputBoundary delegate;
+        private volatile boolean accepting = true;
 
-        @Override
-        public void save(HealthCheckResult result) {
-            throw new UnsupportedOperationException("Monitoring is not connected in this version");
+        private MonitoringExecution(MonitoringInputBoundary delegate) {
+            this.delegate = delegate;
         }
 
         @Override
-        public List<HealthCheckResult> findByServiceId(UUID serviceId) {
-            return List.of();
+        public synchronized void checkOnce(Service service) {
+            if (accepting) {
+                delegate.checkOnce(service);
+            }
         }
 
-        @Override
-        public Map<UUID, HealthCheckResult> findByIds(Set<UUID> allowedServiceIds, Set<UUID> observationIds) {
-            return Map.of();
+        private void stopAccepting() {
+            accepting = false;
         }
+
+        private synchronized void awaitCurrentCheck() {
+            // Acquiring this monitor waits for any check that passed the accepting guard.
+        }
+    }
+
+    /** The monitoring inputs and the investigation inputs belonging to the same application wiring. */
+    public static final class MonitoringApplication {
+        private final MonitoringExecution checks;
+        private final MonitoringSessionInputBoundary sessions;
+        private final IncidentInvestigation investigation;
+
+        private MonitoringApplication(MonitoringExecution checks, MonitoringSessionInputBoundary sessions,
+                                      IncidentInvestigation investigation) {
+            this.checks = checks;
+            this.sessions = sessions;
+            this.investigation = investigation;
+        }
+
+        public MonitoringInputBoundary getChecks() { return checks; }
+        public MonitoringSessionInputBoundary getSessions() { return sessions; }
+        public IncidentInvestigation getInvestigation() { return investigation; }
     }
 
     /** UC3's entry points: the failure listener for UC2's wiring and the input boundary for the incident UI. */
