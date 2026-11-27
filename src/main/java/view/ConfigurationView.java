@@ -11,6 +11,9 @@ import use_case.configure_monitored_system.ConfigurationInput;
 import use_case.configure_monitored_system.ServiceInput;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -22,11 +25,16 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -43,20 +51,20 @@ public final class ConfigurationView extends JPanel implements ConfigurationPres
     private final JTextField name = new JTextField();
     private final JTextArea description = new JTextArea(2, 28);
     private final JComboBox<String> savedSystems = new JComboBox<>();
-    private final DefaultListModel<String> serviceLabels = new DefaultListModel<>();
+    private final DefaultListModel<ServiceInput> serviceRows = new DefaultListModel<>();
     private final DefaultListModel<String> dependencyLabels = new DefaultListModel<>();
-    private final JList<String> serviceList = new JList<>(serviceLabels);
+    private final JList<ServiceInput> serviceList = new JList<>(serviceRows);
     private final JList<String> dependencyList = new JList<>(dependencyLabels);
     private final JLabel status = new JLabel(" ");
 
-    private final JButton newSystem = new JButton("New system");
-    private final JButton reload = new JButton("Reload");
-    private final JButton addService = new JButton("Add service");
-    private final JButton editService = new JButton("Edit");
-    private final JButton removeService = new JButton("Remove");
-    private final JButton addDependency = new JButton("Add dependency");
-    private final JButton removeDependency = new JButton("Remove");
-    private final JButton save = new JButton("Save configuration");
+    private final JButton newSystem = ConfigurationStyle.secondaryButton("New system");
+    private final JButton reload = ConfigurationStyle.secondaryButton("Reload");
+    private final JButton addService = ConfigurationStyle.secondaryButton("Add service");
+    private final JButton editService = ConfigurationStyle.secondaryButton("Edit service");
+    private final JButton removeService = ConfigurationStyle.secondaryButton("Remove");
+    private final JButton addDependency = ConfigurationStyle.secondaryButton("Add dependency");
+    private final JButton removeDependency = ConfigurationStyle.secondaryButton("Remove");
+    private final JButton save = ConfigurationStyle.primaryButton("Save configuration");
 
     private final List<MonitoredSystem> systems = new ArrayList<>();
     private final List<ServiceInput> services = new ArrayList<>();
@@ -73,46 +81,27 @@ public final class ConfigurationView extends JPanel implements ConfigurationPres
         content.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         add(content, BorderLayout.CENTER);
 
-        JPanel systemPicker = new JPanel(new BorderLayout(8, 0));
-        JLabel systemLabel = new JLabel("Saved system");
-        systemLabel.setLabelFor(savedSystems);
-        systemPicker.add(systemLabel, BorderLayout.WEST);
-        systemPicker.add(savedSystems, BorderLayout.CENTER);
-        JPanel systemActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        systemActions.add(newSystem);
-        systemActions.add(reload);
-        systemPicker.add(systemActions, BorderLayout.EAST);
+        content.setBackground(ConfigurationStyle.CANVAS);
+        content.add(buildHeader(), BorderLayout.NORTH);
 
-        JPanel fields = new JPanel(new BorderLayout(8, 6));
-        JPanel labels = new JPanel(new GridLayout(0, 1, 0, 6));
-        JLabel nameLabel = new JLabel("System name");
-        nameLabel.setLabelFor(name);
-        labels.add(nameLabel);
-        JLabel descriptionLabel = new JLabel("Description");
-        descriptionLabel.setLabelFor(description);
-        labels.add(descriptionLabel);
-        fields.add(labels, BorderLayout.WEST);
-        JPanel inputs = new JPanel(new BorderLayout(0, 6));
-        inputs.add(name, BorderLayout.NORTH);
-        description.setLineWrap(true);
-        description.setWrapStyleWord(true);
-        inputs.add(new JScrollPane(description), BorderLayout.CENTER);
-        fields.add(inputs, BorderLayout.CENTER);
-        JPanel header = new JPanel(new BorderLayout(0, 8));
-        header.add(systemPicker, BorderLayout.NORTH);
-        header.add(fields, BorderLayout.SOUTH);
-        content.add(header, BorderLayout.NORTH);
-
+        serviceList.setCellRenderer(new ServiceRowRenderer());
+        dependencyList.setCellRenderer(new DependencyRowRenderer());
+        removeService.getAccessibleContext().setAccessibleName("Remove selected service");
+        removeDependency.getAccessibleContext().setAccessibleName("Remove selected dependency");
         JSplitPane map = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
-                mapSection("System Map — Services", serviceList, addService, editService, removeService),
-                mapSection("Dependencies (service → required service)", dependencyList, addDependency,
-                        removeDependency));
-        map.setResizeWeight(0.5);
+                mapSection("Services", serviceList, addService, editService, removeService),
+                mapSection("Dependencies", dependencyList, addDependency, removeDependency));
+        map.setBorder(BorderFactory.createEmptyBorder());
+        map.setBackground(ConfigurationStyle.CANVAS);
+        map.setDividerSize(10);
+        map.setResizeWeight(0.53);
         content.add(map, BorderLayout.CENTER);
 
         JPanel footer = new JPanel(new BorderLayout());
+        footer.setOpaque(false);
+        status.setForeground(ConfigurationStyle.MUTED);
+        status.setBorder(ConfigurationStyle.inset(6, 4));
         footer.add(status, BorderLayout.CENTER);
-        footer.add(save, BorderLayout.EAST);
         content.add(footer, BorderLayout.SOUTH);
 
         serviceList.addListSelectionListener(event -> updateActions());
@@ -127,6 +116,7 @@ public final class ConfigurationView extends JPanel implements ConfigurationPres
     }
 
     public void connect(ConfigurationController controller) {
+        ConfigurationStyle.ensureWindowFitsConfiguration(savedSystems);
         savedSystems.addActionListener(event -> selectSavedSystem());
         newSystem.addActionListener(event -> {
             if (confirmDiscard()) {
@@ -200,17 +190,152 @@ public final class ConfigurationView extends JPanel implements ConfigurationPres
         controller.loadSystems();
     }
 
-    private JPanel mapSection(String title, JList<String> list, JButton... buttons) {
-        JPanel section = new JPanel(new BorderLayout());
-        section.setBorder(BorderFactory.createTitledBorder(title));
+    private JPanel buildHeader() {
+        JPanel header = ConfigurationStyle.surface(new BorderLayout(0, 12));
+        header.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(ConfigurationStyle.BORDER, 1, true),
+                ConfigurationStyle.inset(12, 14)));
+
+        JLabel systemLabel = new JLabel("Monitored system");
+        systemLabel.setLabelFor(savedSystems);
+        ConfigurationStyle.label(systemLabel);
+        ConfigurationStyle.field(savedSystems);
+        JPanel picker = ConfigurationStyle.surface(new BorderLayout(0, 4));
+        picker.add(systemLabel, BorderLayout.NORTH);
+        picker.add(savedSystems, BorderLayout.CENTER);
+        Dimension pickerMinimum = picker.getMinimumSize();
+        picker.setMinimumSize(new Dimension(Math.max(pickerMinimum.width, 220), pickerMinimum.height));
+
+        JPanel systemActions = ConfigurationStyle.surface(new FlowLayout(FlowLayout.TRAILING, 8, 0));
+        systemActions.add(newSystem);
+        systemActions.add(reload);
+        systemActions.add(save);
+
+        JPanel toolbar = ConfigurationStyle.surface(new BorderLayout(12, 0));
+        toolbar.add(picker, BorderLayout.CENTER);
+        toolbar.add(systemActions, BorderLayout.EAST);
+        header.add(toolbar, BorderLayout.NORTH);
+
+        description.setLineWrap(true);
+        description.setWrapStyleWord(true);
+        ConfigurationStyle.field(name);
+        ConfigurationStyle.field(description);
+        JScrollPane descriptionScroll = new JScrollPane(description);
+        descriptionScroll.setBorder(BorderFactory.createLineBorder(ConfigurationStyle.BORDER));
+
+        JPanel fields = ConfigurationStyle.surface(new GridBagLayout());
+        addSystemField(fields, 0, "System name", name, name);
+        addSystemField(fields, 1, "Description", description, descriptionScroll);
+        header.add(fields, BorderLayout.CENTER);
+        return header;
+    }
+
+    private static void addSystemField(JPanel panel, int row, String text, Component field, Component input) {
+        JLabel label = new JLabel(text);
+        label.setLabelFor(field);
+        ConfigurationStyle.label(label);
+
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridy = row;
+        constraints.anchor = GridBagConstraints.NORTHWEST;
+        constraints.insets.set(4, 0, 4, 12);
+        panel.add(label, constraints);
+
+        constraints.gridx = 1;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets.right = 0;
+        panel.add(input, constraints);
+    }
+
+    private static JPanel mapSection(String title, JList<?> list, JButton... buttons) {
+        JPanel section = ConfigurationStyle.surface(new BorderLayout());
+        section.setBorder(BorderFactory.createLineBorder(ConfigurationStyle.BORDER, 1, true));
+        JLabel heading = ConfigurationStyle.heading(title);
+        heading.setLabelFor(list);
+        heading.setBorder(BorderFactory.createCompoundBorder(
+                ConfigurationStyle.divider(0, 1), ConfigurationStyle.inset(11, 13)));
+        section.add(heading, BorderLayout.NORTH);
+
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        section.add(new JScrollPane(list), BorderLayout.CENTER);
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEADING));
-        for (JButton button : buttons) {
-            actions.add(button);
+        list.setBackground(ConfigurationStyle.SURFACE);
+        list.setForeground(ConfigurationStyle.TEXT);
+        list.setSelectionBackground(ConfigurationStyle.SELECTED);
+        list.setSelectionForeground(ConfigurationStyle.TEXT);
+        section.add(ConfigurationStyle.scroll(list), BorderLayout.CENTER);
+
+        JPanel actions = ConfigurationStyle.surface(null);
+        actions.setLayout(new BoxLayout(actions, BoxLayout.LINE_AXIS));
+        actions.setBorder(BorderFactory.createCompoundBorder(
+                ConfigurationStyle.divider(1, 0), ConfigurationStyle.inset(7, 8)));
+        for (int i = 0; i < buttons.length; i++) {
+            if (i > 0) {
+                actions.add(Box.createHorizontalStrut(8));
+            }
+            actions.add(buttons[i]);
         }
+        actions.add(Box.createHorizontalGlue());
+        Dimension actionSize = actions.getPreferredSize();
+        section.setMinimumSize(new Dimension(Math.max(actionSize.width + 2, 250),
+                heading.getPreferredSize().height + actionSize.height + 58));
         section.add(actions, BorderLayout.SOUTH);
         return section;
+    }
+
+    private static final class ServiceRowRenderer extends JPanel implements ListCellRenderer<ServiceInput> {
+        private final JLabel name = new JLabel();
+        private final JLabel target = new JLabel();
+        private final JLabel method = new JLabel();
+
+        ServiceRowRenderer() {
+            super(new BorderLayout(10, 0));
+            JPanel details = new JPanel(new GridLayout(0, 1, 0, 2));
+            details.setOpaque(false);
+            name.setFont(name.getFont().deriveFont(Font.BOLD));
+            name.setForeground(ConfigurationStyle.TEXT);
+            target.setForeground(ConfigurationStyle.MUTED);
+            details.add(name);
+            details.add(target);
+            add(details, BorderLayout.CENTER);
+
+            JPanel type = new JPanel(new GridBagLayout());
+            type.setOpaque(false);
+            method.setOpaque(true);
+            method.setFont(method.getFont().deriveFont(Font.BOLD, 11f));
+            method.setBorder(ConfigurationStyle.inset(3, 7));
+            type.add(method);
+            add(type, BorderLayout.EAST);
+        }
+
+        @Override
+        public Component getListCellRendererComponent(JList<? extends ServiceInput> list, ServiceInput service,
+                                                      int index, boolean selected, boolean hasFocus) {
+            boolean http = service.getMethod() == MonitoringTarget.Method.HTTP;
+            name.setText(displayName(service));
+            target.setText(service.getTarget());
+            method.setText(http ? "HTTP" : "Docker");
+            method.setBackground(http ? new Color(0xE6EFFD) : new Color(0xE6F3EE));
+            method.setForeground(http ? new Color(0x264E91) : new Color(0x215E4C));
+            setBackground(selected ? list.getSelectionBackground() : list.getBackground());
+            setBorder(BorderFactory.createCompoundBorder(
+                    hasFocus ? BorderFactory.createLineBorder(ConfigurationStyle.TEAL)
+                            : ConfigurationStyle.divider(0, 1),
+                    BorderFactory.createEmptyBorder(hasFocus ? 8 : 9, hasFocus ? 12 : 13, 9, hasFocus ? 12 : 13)));
+            getAccessibleContext().setAccessibleName(name.getText() + ", " + method.getText() + ", " + target.getText());
+            return this;
+        }
+    }
+
+    private static final class DependencyRowRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                      int index, boolean selected, boolean hasFocus) {
+            super.getListCellRendererComponent(list, value, index, selected, hasFocus);
+            setBorder(BorderFactory.createCompoundBorder(
+                    hasFocus ? BorderFactory.createLineBorder(ConfigurationStyle.TEAL)
+                            : ConfigurationStyle.divider(0, 1), ConfigurationStyle.inset(12, 13)));
+            return this;
+        }
     }
 
     private void refreshPicker() {
@@ -326,15 +451,15 @@ public final class ConfigurationView extends JPanel implements ConfigurationPres
 
     private void renderMap() {
         Map<UUID, String> names = new HashMap<>();
-        serviceLabels.clear();
+        serviceRows.clear();
         for (ServiceInput service : services) {
             String serviceName = displayName(service);
             names.put(service.getId(), serviceName);
-            serviceLabels.addElement(serviceName + " — " + service.getMethod() + " " + service.getTarget());
+            serviceRows.addElement(service);
         }
         dependencyLabels.clear();
         for (Dependency edge : dependencies) {
-            dependencyLabels.addElement(names.get(edge.getDependentServiceId()) + " → "
+            dependencyLabels.addElement(names.get(edge.getDependentServiceId()) + " depends on "
                     + names.get(edge.getRequiredServiceId()));
         }
         updateActions();

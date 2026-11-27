@@ -8,6 +8,7 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
+import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.GridLayout;
 import java.util.Optional;
@@ -35,15 +36,28 @@ final class ServiceEditor {
         method.addActionListener(event -> updateLabel.run());
         updateLabel.run();
 
-        JPanel form = new JPanel(new GridLayout(0, 2, 8, 6));
-        addField(form, "Service name", name);
-        addField(form, "Monitoring method", method);
-        form.add(targetLabel);
-        form.add(target);
-        addField(form, "Check interval (ms)", interval);
-        addField(form, "Timeout (ms)", timeout);
-        addField(form, "Failure threshold", failure);
-        addField(form, "Recovery threshold", recovery);
+        for (JTextField field : new JTextField[]{name, target, interval, timeout, failure, recovery}) {
+            ConfigurationStyle.field(field);
+        }
+        ConfigurationStyle.field(method);
+
+        JPanel form = ConfigurationStyle.surface(new BorderLayout(0, 12));
+        form.setBorder(ConfigurationStyle.inset(12, 14));
+
+        JPanel service = ConfigurationStyle.surface(new GridLayout(0, 2, 12, 7));
+        addField(service, "Service name", name);
+        addField(service, "Monitoring method", method);
+        ConfigurationStyle.label(targetLabel);
+        service.add(targetLabel);
+        service.add(target);
+
+        JPanel policy = ConfigurationStyle.surface(new GridLayout(0, 2, 12, 7));
+        addField(policy, "Check interval (ms)", interval);
+        addField(policy, "Timeout (ms)", timeout);
+        addField(policy, "Failure threshold", failure);
+        addField(policy, "Recovery threshold", recovery);
+        form.add(group("Service details", service), BorderLayout.NORTH);
+        form.add(group("Monitoring policy", policy), BorderLayout.CENTER);
 
         int result = JOptionPane.showConfirmDialog(parent, form, isNew ? "Add service" : "Edit service",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -55,9 +69,17 @@ final class ServiceEditor {
                 target.getText(), interval.getText(), timeout.getText(), failure.getText(), recovery.getText()));
     }
 
+    private static JPanel group(String title, JPanel fields) {
+        JPanel group = ConfigurationStyle.surface(new BorderLayout(0, 8));
+        group.add(ConfigurationStyle.heading(title), BorderLayout.NORTH);
+        group.add(fields, BorderLayout.CENTER);
+        return group;
+    }
+
     static void addField(JPanel form, String labelText, Component field) {
         JLabel label = new JLabel(labelText);
         label.setLabelFor(field);
+        ConfigurationStyle.label(label);
         form.add(label);
         form.add(field);
     }
