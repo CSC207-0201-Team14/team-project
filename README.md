@@ -143,8 +143,8 @@ As a developer, I want to perform a supported recovery action and verify its res
 
 1. Sentinel displays the recommended target container and how its current state determines the operation.
 2. The developer confirms recovery of the container.
-3. Sentinel inspects the container state, executes the matching operation (start a stopped container, unpause a paused container, or restart a running but failing container), and records the attempt's outcome.
-4. Sentinel checks the target service and affected dependent services again.
+3. Sentinel rechecks the approved target and operation, then starts a stopped container, unpauses a paused container, or restarts an eligible running container. Sentinel records the attempt's outcome.
+4. Monitoring records fresh checks, and Sentinel evaluates them for the target and other services the incident requires for resolution.
 5. Sentinel confirms that the configured recovery criteria are satisfied.
 6. Sentinel marks the incident as resolved and retains it in the incident history.
 7. Sentinel displays the recovery result to the developer.
@@ -155,6 +155,7 @@ As a developer, I want to perform a supported recovery action and verify its res
 - **2a. Developer cancels:** Sentinel performs no recovery action, and the incident remains unresolved.
 - **3a. Action fails or permission is denied:** Sentinel records and displays the failure. The incident remains unresolved, and the developer may retry or follow manual instructions.
 - **3b. Container state is unsuitable for automatic recovery:** If the container is restarting, was killed for exceeding memory, or is missing, Sentinel performs no operation and shows the manual next steps. The incident remains unresolved.
+- **3c. The target or operation changes after preview:** If the action still applies, Sentinel shows an updated preview for the developer to confirm.
 - **4a. Recovery cannot be verified:** Sentinel reports the monitoring error and keeps the incident unresolved until verification succeeds.
 - **5a. Recovery criteria are not satisfied:** Sentinel keeps the incident unresolved, displays the remaining failures, and continues monitoring.
 
@@ -246,7 +247,7 @@ their recovery threshold.
 Keep monitoring the affected services, then click **Verify recovery** to evaluate the fresh checks.
 After an external fix, click **Begin manual verification** before collecting fresh checks.
 **Recovery history** shows the recorded attempts and verification start, including after restart.
-Sentinel stores its local data in the `~/.sentinel` directory and recovery records in `~/.sentinel/recovery`.sentinel`.
+Sentinel stores its local data in `~/.sentinel` and recovery records in `~/.sentinel/recovery`.
 
 **Run the checks:** the tests are plain `main` programs. Compile them and copy their dependencies next to the classes once:
 
@@ -261,8 +262,8 @@ Then run any check class, for example the UC3 suite:
 
 For UC4, use the same classpath with `use_case.recover_service.RecoveryInteractorChecks`,
 `use_case.recover_service.RecoveryVerificationChecks`,
-`data_access.persistence.JsonRecoveryRecordRepositoryChecks`, and
-`data_access.docker.DockerEngineInspectorChecks`. The Docker checks use a simulated Engine.
+`data_access.persistence.JsonRecoveryRecordRepositoryChecks`,
+`data_access.docker.DockerEngineInspectorChecks`, and `view.RecoveryUiChecks`. The Docker checks use a simulated Engine.
 
 ---
 
