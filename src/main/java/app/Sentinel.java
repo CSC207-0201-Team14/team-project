@@ -4,9 +4,11 @@ import data_access.configuration.JsonConfigurationRepository;
 import data_access.http.HttpHealthChecker;
 import data_access.docker.DockerEngineInspector;
 import data_access.docker.DockerHealthChecker;
+import data_access.docker.DockerRecoveryGateway;
 import data_access.monitoring.TargetHealthChecker;
 import data_access.persistence.JsonObservationStore;
 import data_access.persistence.JsonIncidentRepository;
+import data_access.persistence.JsonRecoveryRecordRepository;
 import infrastructure.scheduling.ExecutorMonitoringScheduler;
 import infrastructure.scheduling.SingleThreadIncidentWorker;
 import interface_adapter.configuration.ConfigurationController;
@@ -20,6 +22,8 @@ import interface_adapter.investigate_incident.ObservationLookupReader;
 import interface_adapter.monitor_service_health.MonitoringController;
 import interface_adapter.monitor_service_health.MonitoringPresenter;
 import interface_adapter.monitor_service_health.MonitoringViewModel;
+import interface_adapter.recover_service.RecoveryController;
+import interface_adapter.recover_service.RecoveryPresenter;
 import entity.MonitoredSystem;
 import entity.Service;
 import use_case.configure_monitored_system.ConfigurationInteractor;
@@ -43,10 +47,13 @@ import use_case.monitor_service_health.MonitoringSessionInputBoundary;
 import use_case.monitor_service_health.MonitoringSessionInteractor;
 import use_case.monitor_service_health.ObservationLookup;
 import use_case.monitor_service_health.ObservationStore;
+import use_case.recover_service.ContainerRecoveryPolicy;
+import use_case.recover_service.RecoveryInteractor;
+import use_case.recover_service.RecoveryVerifier;
+import use_case.recover_service.VerifiedRecoveryRecommendations;
 import use_case.shared.IncidentRepository;
 import view.ConfigurationView;
 import view.IncidentView;
-import view.PlaceholderPanel;
 import view.SentinelWindow;
 import view.monitor_service_health.MonitoringView;
 
@@ -59,6 +66,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -71,7 +80,15 @@ public final class Sentinel implements AutoCloseable {
     /** Owned here: shared by every use case that reads or writes incidents, and closed with the application. */
     private final SingleThreadIncidentWorker incidentWorker = new SingleThreadIncidentWorker();
     private final ExecutorMonitoringScheduler monitoringScheduler = new ExecutorMonitoringScheduler();
+    private final ExecutorService dockerWorker = Executors.newSingleThreadExecutor(task ->
+            new Thread(task, "recovery-docker-worker"));
+    private final DockerEngineInspector dockerInspector = new DockerEngineInspector();
+    private final RecoveryVerifier recoveryVerifier = new RecoveryVerifier();
     private final JsonObservationStore observations;
+    private final JsonRecoveryRecordRepository recoveryRecords;
+    private final ConfigurationRepositoryReader configurationReader;
+    private final VerifiedRecoveryRecommendations recommendations;
+    private RecoveryController recoveryController;
     private MonitoringApplication monitoring;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -80,6 +97,10 @@ public final class Sentinel implements AutoCloseable {
         this.incidents = new JsonIncidentRepository(dataDirectory.resolve("incidents"));
         this.observations = new JsonObservationStore(dataDirectory.resolve("observations"));
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.recoveryRecords = new JsonRecoveryRecordRepository(dataDirectory.resolve("recovery"));
+        this.configurationReader = new ConfigurationRepositoryReader(configurations);
+        this.recommendations = new VerifiedRecoveryRecommendations(new RecoveryRecommendationProvider(),
+                observations, recoveryVerifier, clock);
     }
 
     public static void main(String[] args) {
@@ -92,7 +113,13 @@ public final class Sentinel implements AutoCloseable {
         ConfigurationView configurationView = new ConfigurationView();
 
         IncidentViewModel incidentViewModel = new IncidentViewModel();
-        IncidentView incidentView = new IncidentView(incidentViewModel);
+        RecoveryPresenter recoveryPresenter = new RecoveryPresenter(SwingUtilities::invokeLater);
+        DockerRecoveryGateway dockerRecovery = new DockerRecoveryGateway(dockerInspector, Duration.ofSeconds(10));
+        RecoveryInteractor recovery = new RecoveryInteractor(incidents, configurationReader, recommendations,
+                dockerRecovery, dockerRecovery, recoveryRecords, observations, new ContainerRecoveryPolicy(),
+                recoveryVerifier, clock, UUID::randomUUID, recoveryPresenter, incidentWorker, dockerWorker);
+        recoveryController = new RecoveryController(recovery, recoveryPresenter);
+        IncidentView incidentView = new IncidentView(incidentViewModel, recoveryController);
         MonitoringViewModel monitoringViewModel = new MonitoringViewModel();
         MonitoringPresenter monitoringPresenter = new MonitoringPresenter(monitoringViewModel);
         MonitoringApplication runtime = wireMonitoring(monitoringPresenter, new IncidentPresenter(incidentViewModel));
@@ -106,7 +133,6 @@ public final class Sentinel implements AutoCloseable {
 
         SentinelWindow window = new SentinelWindow(configurationView,
                 monitoringView, incidentView,
-                new PlaceholderPanel("Recover a service and verify resolution"),
                 configurationView::confirmClose,
                 () -> {
                     configurationWorker.shutdown();
@@ -158,7 +184,7 @@ public final class Sentinel implements AutoCloseable {
         }
         IncidentInvestigation investigation = wireInvestigateIncident(observations, observations, incidentOutput);
         TargetHealthChecker checker = new TargetHealthChecker(new HttpHealthChecker(clock),
-                new DockerHealthChecker(new DockerEngineInspector(), clock));
+                new DockerHealthChecker(dockerInspector, clock));
         MonitoringExecution checks = new MonitoringExecution(new MonitoringInteractor(checker, observations,
                 monitoringOutput, investigation.getFailureListener()));
         MonitoringSessionInteractor sessions = new MonitoringSessionInteractor(checks, monitoringScheduler,
@@ -178,8 +204,9 @@ public final class Sentinel implements AutoCloseable {
                 new DependencyFailureRule(UUID::randomUUID), new PotentialImpactRule(UUID::randomUUID));
         RuleBasedIncidentAssessment assessment = new RuleBasedIncidentAssessment(
                 new DependencyIncidentCorrelationPolicy(), rules, clock, UUID::randomUUID, EVIDENCE_WINDOW);
-        IncidentInteractor investigation = new IncidentInteractor(new ConfigurationRepositoryReader(configurations),
-                new ObservationLookupReader(lookup), incidents, assessment, new RecoveryRecommendationProvider(),
+        IncidentInteractor investigation = new IncidentInteractor(configurationReader,
+                new ObservationLookupReader(lookup), incidents, assessment, history == observations ? recommendations
+                        : new VerifiedRecoveryRecommendations(new RecoveryRecommendationProvider(), history, recoveryVerifier, clock),
                 clock, incidentOutput);
         SerializedIncidentInputBoundary serialized = new SerializedIncidentInputBoundary(investigation, incidentWorker);
         IncidentFailureConnector listener = new IncidentFailureConnector(configurations, history, serialized,
@@ -197,15 +224,22 @@ public final class Sentinel implements AutoCloseable {
             monitoring.getSessions().stopAll();
         }
         monitoringScheduler.close();
-        if (monitoring == null) {
-            incidentWorker.close();
-        } else {
-            // A running check may still deliver an incident. Let it finish before closing UC3's worker,
-            // without blocking the EDT. Queued checks will see stopAccepting and do nothing.
-            new Thread(() -> {
+        CompletionStage<Void> recoveryDrained = recoveryController == null
+                ? CompletableFuture.completedFuture(null) : recoveryController.stopAccepting();
+        // In-flight monitoring may deliver incidents and accepted recovery may still save its outcome.
+        // Keep the shared worker open for both while draining away from the EDT.
+        Runnable shutdown = () -> {
+            if (monitoring != null) {
                 monitoring.checks.awaitCurrentCheck();
-                incidentWorker.close();
-            }, "monitoring-shutdown").start();
+            }
+            recoveryDrained.handle((ignored, failure) -> null).toCompletableFuture().join();
+            dockerWorker.shutdown();
+            incidentWorker.close();
+        };
+        if (monitoring == null && recoveryController == null) {
+            shutdown.run();
+        } else {
+            new Thread(shutdown, "sentinel-shutdown").start();
         }
     }
 

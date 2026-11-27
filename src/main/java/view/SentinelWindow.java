@@ -10,9 +10,9 @@ import java.awt.event.WindowEvent;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
-/** The application window: one tab per use case. Closing asks the panels first, then releases resources. */
+/** The application window: tabs for configuration, monitoring, and incidents. Closing asks the panels first, then releases resources. */
 public final class SentinelWindow extends JFrame {
-    public SentinelWindow(JComponent configure, JComponent monitor, JComponent incidents, JComponent recover,
+    public SentinelWindow(JComponent configure, JComponent monitor, JComponent incidents,
                           BooleanSupplier canClose, Runnable onClosed) {
         super("Sentinel");
         Objects.requireNonNull(canClose, "canClose");
@@ -21,8 +21,7 @@ public final class SentinelWindow extends JFrame {
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Configure", null, configure, "Use Case 1: configure a monitored system");
         tabs.addTab("Monitor", null, monitor, "Use Case 2: monitor service health");
-        tabs.addTab("Incidents", null, incidents, "Use Case 3: investigate an incident");
-        tabs.addTab("Recover", null, recover, "Use Case 4: recover a service and verify resolution");
+        tabs.addTab("Incidents", null, incidents, "Investigate incidents and recover services");
         setContentPane(tabs);
 
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);

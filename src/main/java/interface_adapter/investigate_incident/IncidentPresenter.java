@@ -5,7 +5,6 @@ import entity.DiagnosticFinding;
 import entity.FailureEvent;
 import entity.HealthCheckResult;
 import entity.Incident;
-import entity.RecoveryAction;
 import use_case.investigate_incident.IncidentDetails;
 import use_case.investigate_incident.IncidentOutputBoundary;
 import use_case.investigate_incident.IncidentSummary;
@@ -87,8 +86,9 @@ public final class IncidentPresenter implements IncidentOutputBoundary {
         Map<UUID, String> names = details.getServiceNames();
         String failing = incident.getFailingServiceIds().stream().map(id -> name(names, id)).sorted()
                 .collect(Collectors.joining(", "));
-        List<String> actions = details.getRecommendedActions().stream()
-                .map(RecoveryAction::getDescription).collect(Collectors.toList());
+        List<IncidentDetailsState.RecoveryChoice> actions = details.getRecommendedActions().stream()
+                .map(action -> new IncidentDetailsState.RecoveryChoice(action.getId(), action.getDescription()))
+                .collect(Collectors.toList());
         return new IncidentDetailsState(incident.getId(), "Incident affecting " + failing,
                 statusName(incident.getStatus()), timeline(incident),
                 suspectedCause(incident, names), recordedFailures(incident, names), evidence(details, names),
@@ -182,7 +182,7 @@ public final class IncidentPresenter implements IncidentOutputBoundary {
     }
 
     /** Extension 5a: with no supported action, only the manual next steps apply. */
-    private static String recommendationNote(List<String> actions) {
+    private static String recommendationNote(List<IncidentDetailsState.RecoveryChoice> actions) {
         return actions.isEmpty()
                 ? "No recovery action is supported for this incident. Follow the manual next steps above."
                 : "Recovery is a suggestion. It runs only after you review and confirm it.";

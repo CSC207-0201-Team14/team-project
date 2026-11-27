@@ -1,5 +1,7 @@
 package use_case.recover_service;
 
+import entity.IncidentRecoveryRecord;
+
 /** Presenters marshal Swing updates onto the EDT. */
 public interface RecoveryOutputBoundary {
     void presentPreview(RecoveryPreview preview);
@@ -12,6 +14,8 @@ public interface RecoveryOutputBoundary {
     void presentVerification(VerificationResult result);
 
     void presentResolved(ResolutionResult result);
+
+    void presentHistory(IncidentRecoveryRecord record);
 
     void presentError(String message);
 }

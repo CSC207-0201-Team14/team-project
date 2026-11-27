@@ -28,9 +28,10 @@ import java.util.stream.Collectors;
  * it, so the next service still failing downstream becomes a target. The recovered service itself stays in the
  * recommendations; deciding whether to act on it now is the recovery use case's job.
  */
-public final class RecoveryRecommendationProvider {
+public final class RecoveryRecommendationProvider implements IncidentRecoveryRecommendations {
 
     /** Recommendations from recorded failures alone, for callers without current health. */
+    @Override
     public List<RecoveryAction> recommend(Incident incident, ConfigurationSnapshot configuration) {
         return recommend(incident, configuration, Set.of());
     }

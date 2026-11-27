@@ -4,6 +4,7 @@ import interface_adapter.investigate_incident.IncidentDetailsState;
 import interface_adapter.investigate_incident.IncidentListItem;
 import interface_adapter.investigate_incident.IncidentViewModel;
 import interface_adapter.investigate_incident.InvestigateIncidentController;
+import interface_adapter.recover_service.RecoveryController;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -37,7 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Use Case 3 panel: pick a monitored system, choose one of its incidents, and read the presenter's
@@ -63,9 +63,7 @@ public final class IncidentView extends JPanel {
     private final JTextArea evidenceText = section();
     private final JTextArea impactText = section();
     private final JTextArea nextStepsText = section();
-    private final JTextArea actionsText = section();
-    private final JTextArea recommendationText = section();
-    private final JButton recover = new JButton("Recover…");
+    private final RecoveryPanel recovery;
     private final JTextArea historyText = section();
     private final JPanel details = new WidthTrackingPanel();
     private final JScrollPane detailsScroll = new JScrollPane(details);
@@ -73,7 +71,7 @@ public final class IncidentView extends JPanel {
     private InvestigateIncidentController controller;
     private boolean updating;
 
-    public IncidentView(IncidentViewModel viewModel) {
+    public IncidentView(IncidentViewModel viewModel, RecoveryController recoveryController) {
         super(new BorderLayout(8, 10));
         this.viewModel = Objects.requireNonNull(viewModel, "viewModel");
         setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -107,7 +105,8 @@ public final class IncidentView extends JPanel {
         details.add(titled("Evidence", evidenceText));
         details.add(titled("Potential impact", impactText));
         details.add(titled("Next steps", nextStepsText));
-        details.add(recommendations());
+        recovery = new RecoveryPanel(recoveryController, this::refreshSelectedIncident);
+        details.add(titled("Recovery", recovery));
         details.add(titled("History", historyText));
         detailsScroll.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -125,14 +124,19 @@ public final class IncidentView extends JPanel {
         this.controller = Objects.requireNonNull(controller, "controller");
         systems.addActionListener(event -> {
             if (!updating) {
+                showNoDetails(NO_SELECTION);
                 requestIncidents();
             }
         });
-        refresh.addActionListener(event -> requestIncidents());
+        refresh.addActionListener(event -> {
+            requestIncidents();
+            refreshSelectedIncident();
+        });
         incidentList.addListSelectionListener(event -> {
             IncidentListItem selected = incidentList.getSelectedValue();
             if (!updating && !event.getValueIsAdjusting() && selected != null) {
                 status.setText("Opening incident…");
+                recovery.select(selected.getIncidentId());
                 controller.openIncident(selected.getIncidentId());
             }
         });
@@ -166,6 +170,9 @@ public final class IncidentView extends JPanel {
         }
         names.put(systemId, name);
         showSystems(names);
+        if (systemId.equals(selectedSystem())) {
+            refreshSelectedIncident();
+        }
     }
 
     private void modelChanged(PropertyChangeEvent event) {
@@ -183,6 +190,7 @@ public final class IncidentView extends JPanel {
             case IncidentViewModel.PROCESSED:
                 if (event.getNewValue().equals(selectedSystem())) {
                     requestIncidents();
+                    refreshSelectedIncident();
                 }
                 break;
             default:
@@ -224,10 +232,7 @@ public final class IncidentView extends JPanel {
         evidenceText.setText(state.getEvidence());
         impactText.setText(state.getPotentialImpact());
         nextStepsText.setText(state.getNextSteps());
-        actionsText.setText(state.getRecommendedActions().stream().map(action -> "• " + action)
-                .collect(Collectors.joining("\n")));
-        actionsText.setVisible(!state.getRecommendedActions().isEmpty());
-        recommendationText.setText(state.getRecommendationNote());
+        recovery.showDetails(state);
         historyText.setText(state.getHistory());
         setDetailsVisible(true);
         SwingUtilities.invokeLater(() -> detailsScroll.getVerticalScrollBar().setValue(0));
@@ -239,6 +244,7 @@ public final class IncidentView extends JPanel {
     }
 
     private void showNoDetails(String message) {
+        recovery.select(null);
         title.setText(message);
         setDetailsVisible(false);
     }
@@ -273,16 +279,11 @@ public final class IncidentView extends JPanel {
         refresh.setEnabled(hasSystems);
     }
 
-    private JPanel recommendations() {
-        recover.setEnabled(false);
-        recover.setToolTipText("Recovery (Use Case 4) is not available in this version yet.");
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEADING, 0, 0));
-        buttons.add(recover);
-        JPanel body = new JPanel(new BorderLayout(0, 6));
-        body.add(actionsText, BorderLayout.NORTH);
-        body.add(recommendationText, BorderLayout.CENTER);
-        body.add(buttons, BorderLayout.SOUTH);
-        return titled("Recommended recovery", body);
+    private void refreshSelectedIncident() {
+        IncidentListItem selected = incidentList.getSelectedValue();
+        if (controller != null && selected != null) {
+            controller.openIncident(selected.getIncidentId());
+        }
     }
 
     private UUID selectedSystem() {

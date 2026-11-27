@@ -1,5 +1,7 @@
 package use_case.recover_service;
 
+import data_access.persistence.JsonIncidentRepository;
+import data_access.persistence.JsonRecoveryRecordRepository;
 import entity.Dependency;
 import entity.DiagnosticFinding;
 import entity.FailureEvent;
@@ -13,6 +15,12 @@ import entity.RecoveryAction;
 import entity.RecoveryAttempt;
 import entity.Service;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.Queue;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -40,13 +48,14 @@ import use_case.shared.IncidentRepository;
 public final class RecoveryInteractorChecks {
     private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         rejectsUnconfirmedRequests();
         rejectsActionsThatAreNotRecommended();
         rejectsResolvedIncidents();
         httpOnlyIncidentGetsManualSteps();
         previewShowsOperationWithoutChangingAnything();
         choosesOperationFromLiveStateAtExecution();
+        changedDockerTargetAndIdentityRequireConfirmation();
         unsuitableStateRecordsNoAttempt();
         permissionDeniedIsRecordedAndIncidentStaysUnresolved();
         failedOperationIsRecorded();
@@ -61,21 +70,23 @@ public final class RecoveryInteractorChecks {
         dependentIsRecoveredOnceItsDependencyRecovers();
         failingTargetIsStillRestarted();
         unreadableObservationsRunNoOperation();
+        asynchronousRecoveryPreservesIncidentUpdates();
+        persistedRecoverySurvivesRestart();
         System.out.println("UC4 recovery interactor checks passed");
     }
 
     private static void rejectsUnconfirmedRequests() {
         Fixture f = new Fixture();
-        f.interactor.executeRecovery(new RecoveryRequest(f.incident.getId(), f.dbAction().getId(), false));
-        check(f.output.errors.size() == 1 && f.output.errors.get(0).contains("not confirmed"),
-                "An unconfirmed request is rejected");
-        check(f.containers.inspections == 0 && f.containers.operations.isEmpty() && f.records.stored.isEmpty(),
-                "Nothing is inspected, executed or recorded without confirmation");
+        Fixture other = new Fixture();
+        other.preview();
+        f.interactor.executeRecovery(new RecoveryRequest(only(other.output.previews)));
+        check(f.output.errors.size() == 1 && f.containers.inspections == 0 && f.containers.operations.isEmpty(),
+                "A preview issued by a different session cannot authorize a Docker operation");
     }
 
     private static void rejectsActionsThatAreNotRecommended() {
         Fixture f = new Fixture();
-        f.interactor.executeRecovery(new RecoveryRequest(f.incident.getId(), UUID.randomUUID(), true));
+        f.interactor.previewRecovery(f.incident.getId(), UUID.randomUUID());
         check(f.output.errors.size() == 1 && f.output.errors.get(0).contains("no longer recommended"),
                 "An unknown or stale action is rejected");
         check(f.containers.operations.isEmpty(), "No operation runs for an unrecommended action");
@@ -84,8 +95,9 @@ public final class RecoveryInteractorChecks {
     private static void rejectsResolvedIncidents() {
         Fixture f = new Fixture();
         RecoveryAction action = f.dbAction();
+        f.preview();
         f.incidents.save(f.resolvedIncident());
-        f.interactor.executeRecovery(new RecoveryRequest(f.incident.getId(), action.getId(), true));
+        f.interactor.executeRecovery(new RecoveryRequest(only(f.output.previews)));
         check(f.output.errors.equals(List.of("The incident is already resolved")) && f.containers.operations.isEmpty(),
                 "A resolved incident cannot be recovered again");
         f.interactor.previewRecovery(UUID.randomUUID(), action.getId());
@@ -132,8 +144,32 @@ public final class RecoveryInteractorChecks {
         f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
         f.containers.state = new ContainerState(ContainerState.Status.EXITED, false);
         f.confirm();
-        check(f.containers.operations.equals(List.of("start:db-container")),
-                "The container is re-inspected at execution, so the latest state decides the operation");
+        check(f.containers.operations.isEmpty(), "A changed operation requires a fresh confirmation");
+        f.confirm();
+        check(f.containers.operations.equals(List.of("start:db-container")), "The fresh preview authorizes START");
+    }
+
+    private static void changedDockerTargetAndIdentityRequireConfirmation() {
+        Fixture f = new Fixture();
+        f.preview();
+        RecoveryRequest original = new RecoveryRequest(only(f.output.previews));
+        Service updated = new Service(f.db.getId(), f.systemId, f.db.getName(),
+                MonitoringTarget.docker("new-db"), f.dbPolicy);
+        f.configuration = ConfigurationSnapshot.available(
+                new MonitoredSystem(f.systemId, "Shop", "", List.of(f.api, updated), List.of(f.edge)));
+        f.interactor.executeRecovery(original);
+        RecoveryPreview refreshed = f.output.previews.get(1);
+        check(refreshed.getContainerId().equals("new-db") && f.containers.operations.isEmpty(),
+                "An edited Docker target refreshes the preview even when the action ID stays the same");
+
+        f.containers.identity = "replacement-id";
+        f.interactor.executeRecovery(new RecoveryRequest(refreshed));
+        check(f.containers.operations.isEmpty(), "Reassigning the container name requires confirmation again");
+        RecoveryRequest replacement = new RecoveryRequest(f.output.previews.get(2));
+        f.interactor.executeRecovery(replacement);
+        f.interactor.executeRecovery(replacement);
+        check(f.containers.operations.equals(List.of("restart:replacement-id")),
+                "The authorized canonical container is operated on exactly once");
     }
 
     private static void expectOperation(ContainerState.Status status, String operation) {
@@ -151,10 +187,11 @@ public final class RecoveryInteractorChecks {
     private static void unsuitableStateRecordsNoAttempt() {
         Fixture f = new Fixture();
         f.containers.state = new ContainerState(ContainerState.Status.EXITED, true);
-        f.confirm();
+        f.preview();
         check(f.containers.operations.isEmpty() && f.records.stored.isEmpty() && f.output.attempts.isEmpty(),
                 "No operation runs and no attempt is recorded for an unsuitable state");
-        check(only(f.output.manual).getReason().contains("memory"), "The reason and manual steps are shown");
+        check(only(f.output.previews).getDecision().getExplanation().contains("memory"),
+                "The preview explains the unsuitable state");
         check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "The incident remains unresolved");
     }
 
@@ -195,6 +232,7 @@ public final class RecoveryInteractorChecks {
 
     private static void unavailableEngineIsRecordedWithoutOperation() {
         Fixture f = new Fixture();
+        f.preview();
         f.containers.inspectFailure = new ContainerAccessException(
                 ContainerAccessException.Kind.UNAVAILABLE, "engine unreachable");
         f.confirm();
@@ -312,30 +350,13 @@ public final class RecoveryInteractorChecks {
         check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "Natural recovery alone does not resolve");
     }
 
-    /**
-     * Review scenario: the DB has passed its 3 checks since failing, but the API is still failing, so the incident
-     * stays open and UC3 still recommends the DB. Its running container must not be restarted.
-     */
     private static void recoveredTargetIsNotRestarted() {
         Fixture f = new Fixture();
         f.observations.passes(f.db, START.plusSeconds(50), 3);
-        f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
-
-        f.interactor.previewRecovery(f.incident.getId(), f.dbAction().getId());
-        RecoveryPreview preview = only(f.output.previews);
-        check(preview.getDecision().getKind() == RecoveryDecision.Kind.NOT_NEEDED
-                && preview.getDecision().getOperation().isEmpty(),
-                "The preview says no restart is needed for a recovered target");
-        check(preview.getTargetHealth().isVerified() && preview.getTargetHealth().getConsecutivePasses() == 3,
-                "The preview shows the passing checks behind the decision");
-
-        f.confirm();
-        check(f.containers.operations.isEmpty() && f.records.stored.isEmpty() && f.output.attempts.isEmpty(),
-                "A confirmed request runs nothing and records no attempt");
-        check(only(f.output.manual).getReason().contains("will not be restarted")
-                && !only(f.output.manual).getNextSteps().isEmpty(),
-                "The developer sees why, alongside the findings' next steps");
-        check(f.storedIncident().getStatus() != Incident.Status.RESOLVED, "The incident remains unresolved");
+        f.preview();
+        check(f.output.previews.isEmpty() && f.containers.inspections == 0,
+                "A service that meets its recovery threshold is no longer offered");
+        check(!only(f.output.manual).getNextSteps().isEmpty(), "The incident retains its manual steps");
     }
 
     private static void dependentIsRecoveredOnceItsDependencyRecovers() {
@@ -349,6 +370,11 @@ public final class RecoveryInteractorChecks {
 
         f.observations.passes(f.db, START.plusSeconds(50), 3);
         f.observations.add(f.api, START.plusSeconds(55), HealthCheckResult.Outcome.FAIL);
+        VerifiedRecoveryRecommendations recommendations = new VerifiedRecoveryRecommendations(
+                f.provider, f.observations, new RecoveryVerifier(), f.clock);
+        check(recommendations.recommend(f.incident, f.configuration).stream()
+                        .map(RecoveryAction::getTargetServiceId).collect(Collectors.toList()).equals(List.of(f.api.getId())),
+                "The incident recommendation query skips the recovered DB and promotes the failing API");
         f.interactor.previewRecovery(f.incident.getId(), apiAction.getId());
         RecoveryPreview preview = only(f.output.previews);
         check(preview.getContainerId().equals("api-container")
@@ -357,7 +383,7 @@ public final class RecoveryInteractorChecks {
         check(preview.getAction().getDescription().contains("have recovered"),
                 "The recommendation explains why API became the target");
 
-        f.interactor.executeRecovery(new RecoveryRequest(f.incident.getId(), apiAction.getId(), true));
+        f.interactor.executeRecovery(new RecoveryRequest(preview));
         check(f.containers.operations.equals(List.of("restart:api-container")) && only(f.output.attempts).isSucceeded(),
                 "Confirming restarts API, not the recovered DB");
     }
@@ -399,6 +425,67 @@ public final class RecoveryInteractorChecks {
     }
 
     /** API (HTTP) depends on DB (container db-container). Both fail; DB is the suspected cause. */
+    private static void asynchronousRecoveryPreservesIncidentUpdates() {
+        Fixture f = new Fixture();
+        Queue<Runnable> incidentTasks = new ArrayDeque<>();
+        Queue<Runnable> dockerTasks = new ArrayDeque<>();
+        RecoveryInteractor recovery = f.interactor(f.incidents, f.records, incidentTasks::add, dockerTasks::add);
+        CompletionStage<Void> preview = recovery.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        drain(incidentTasks);
+        check(!preview.toCompletableFuture().isDone(), "Preview waits on Docker without locking the incident worker");
+        drain(dockerTasks);
+        drain(incidentTasks);
+        RecoveryRequest request = new RecoveryRequest(only(f.output.previews));
+
+        CompletionStage<Void> execution = recovery.executeRecovery(request);
+        recovery.executeRecovery(request);
+        drain(incidentTasks);
+        drain(dockerTasks);
+        drain(incidentTasks);
+        check(!execution.toCompletableFuture().isDone() && dockerTasks.size() == 1,
+                "Confirmation can dispatch only one Docker command");
+        Incident updated = f.storedIncident().updateAssessment(Set.of(), List.of());
+        incidentTasks.add(() -> f.incidents.save(updated));
+        drain(incidentTasks);
+        check(f.storedIncident() == updated && f.records.stored.isEmpty(),
+                "An incident update can finish while Docker work is outstanding");
+        drain(dockerTasks);
+        drain(incidentTasks);
+        check(execution.toCompletableFuture().isDone() && f.storedIncident() == updated
+                        && f.records.stored.get(updated.getId()).getAttempts().size() == 1,
+                "The completion waits for recording and preserves the latest incident");
+    }
+
+    private static void persistedRecoverySurvivesRestart() throws Exception {
+        Fixture f = new Fixture();
+        Path directory = Files.createTempDirectory("sentinel-uc4-flow");
+        Path incidentsPath = directory.resolve("incidents");
+        Path recoveryPath = directory.resolve("recovery");
+        JsonIncidentRepository incidents = new JsonIncidentRepository(incidentsPath);
+        incidents.save(f.incident);
+        RecoveryInteractor recovery = f.interactor(incidents, new JsonRecoveryRecordRepository(recoveryPath),
+                Runnable::run, Runnable::run);
+        recovery.previewRecovery(f.incident.getId(), f.dbAction().getId());
+        recovery.executeRecovery(new RecoveryRequest(only(f.output.previews)));
+        Instant window = new JsonRecoveryRecordRepository(recoveryPath).findByIncidentId(f.incident.getId())
+                .orElseThrow().getVerificationStartedAt().orElseThrow();
+        f.observations.passes(f.db, window, 3);
+        f.observations.passes(f.api, window, 2);
+        f.clock.advance(60);
+        RecoveryInteractor reopened = f.interactor(new JsonIncidentRepository(incidentsPath),
+                new JsonRecoveryRecordRepository(recoveryPath), Runnable::run, Runnable::run);
+        reopened.verifyResolution(f.incident.getId());
+        check(new JsonIncidentRepository(incidentsPath).findById(f.incident.getId()).orElseThrow().getStatus()
+                        == Incident.Status.RESOLVED && only(f.output.resolutions).getAttempts().size() == 1,
+                "A reopened app can resolve using fresh observations and the persisted recovery window");
+    }
+
+    private static void drain(Queue<Runnable> tasks) {
+        while (!tasks.isEmpty()) {
+            tasks.remove().run();
+        }
+    }
+
     private static final class Fixture {
         final UUID systemId = UUID.randomUUID();
         final MonitoringPolicy dbPolicy = new MonitoringPolicy(Duration.ofSeconds(10), Duration.ofSeconds(2), 2, 3);
@@ -407,7 +494,7 @@ public final class RecoveryInteractorChecks {
                 MonitoringTarget.docker("db-container"), dbPolicy);
         final Service api;
         final Dependency edge;
-        final ConfigurationSnapshot configuration;
+        ConfigurationSnapshot configuration;
         final RecoveryRecommendationProvider provider = new RecoveryRecommendationProvider();
 
         final FakeIncidents incidents = new FakeIncidents();
@@ -432,11 +519,19 @@ public final class RecoveryInteractorChecks {
                     new MonitoredSystem(systemId, "Shop", "", List.of(api, db), List.of(edge)));
             incident = incidentFailing(db, api);
             incidents.save(incident);
+            interactor = interactor(incidents, records, Runnable::run, Runnable::run);
+        }
+
+        RecoveryInteractor interactor(IncidentRepository incidentRepository, RecoveryRecordRepository recordRepository,
+                                      Executor incidentWorker, Executor dockerWorker) {
             ConfigurationReader configurations = systemId -> systemId.equals(this.systemId)
                     ? Optional.of(configuration) : Optional.empty();
-            interactor = new RecoveryInteractor(incidents, configurations, provider, containers, containers, records,
-                    observations, new ContainerRecoveryPolicy(), new RecoveryVerifier(), clock, UUID::randomUUID,
-                    output);
+            RecoveryVerifier verifier = new RecoveryVerifier();
+            VerifiedRecoveryRecommendations recommendations = new VerifiedRecoveryRecommendations(
+                    provider, observations, verifier, clock);
+            return new RecoveryInteractor(incidentRepository, configurations, recommendations, containers, containers,
+                    recordRepository, observations, new ContainerRecoveryPolicy(), verifier, clock, UUID::randomUUID,
+                    output, incidentWorker, dockerWorker);
         }
 
         Incident incidentFailing(Service... services) {
@@ -477,8 +572,18 @@ public final class RecoveryInteractorChecks {
             return provider.recommend(incident, configuration).get(0);
         }
 
+        void preview() {
+            interactor.previewRecovery(incident.getId(), dbAction().getId());
+        }
+
         void confirm() {
-            interactor.executeRecovery(new RecoveryRequest(incident.getId(), dbAction().getId(), true));
+            if (output.previews.isEmpty()) {
+                preview();
+            }
+            if (!output.previews.isEmpty()) {
+                RecoveryPreview preview = output.previews.remove(output.previews.size() - 1);
+                interactor.executeRecovery(new RecoveryRequest(preview));
+            }
         }
 
         Incident storedIncident() {
@@ -522,6 +627,7 @@ public final class RecoveryInteractorChecks {
         ContainerAccessException operationFailure;
         RuntimeException unexpectedFailure;
         int inspections;
+        String identity;
         final List<String> operations = new ArrayList<>();
 
         @Override
@@ -530,7 +636,7 @@ public final class RecoveryInteractorChecks {
             if (inspectFailure != null) {
                 throw inspectFailure;
             }
-            return state;
+            return new ContainerState(state.getStatus(), state.isOomKilled(), identity == null ? containerId : identity);
         }
 
         @Override
@@ -625,6 +731,9 @@ public final class RecoveryInteractorChecks {
 
         @Override
         public void presentResolved(ResolutionResult result) { resolutions.add(result); }
+
+        @Override
+        public void presentHistory(IncidentRecoveryRecord record) { }
 
         @Override
         public void presentError(String message) { errors.add(message); }
