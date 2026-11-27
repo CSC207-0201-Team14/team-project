@@ -36,7 +36,7 @@ and verification start saved for the selected incident.
 | | Shared: `IncidentRepository`, `IncidentDataException` | Incident storage shared with UC3. |
 | | Shared: `ConfigurationReader`, `ConfigurationSnapshot` | Read-only system configuration shared with UC3. |
 | | Shared: `IncidentWorker` | Serializes UC3 and UC4 incident access. |
-| Interface adapters | `RecoveryController`, `RecoveryPresenter`, `RecoveryViewState` | Forward UI requests, format responses, and deliver view state on the EDT. |
+| Interface adapters | `RecoveryController`, `RecoveryPresenter`, `RecoveryViewModel` | Forward UI requests, format responses, and deliver view state on the EDT. |
 | Frameworks and drivers | `DockerRecoveryGateway`, `JsonRecoveryRecordRepository`, `RecoveryPanel` | Docker adapter, local JSON storage, and Swing controls in the Incidents tab. |
 | Composition root | `Sentinel` | Wires repositories, the shared incident worker, the dedicated Docker executor, and the clock. |
 
@@ -140,7 +140,7 @@ classDiagram
     RecoveryController --> RecoveryInputBoundary
     RecoveryController --> RecoveryPresenter
     RecoveryPresenter ..|> RecoveryOutputBoundary
-    RecoveryPresenter --> RecoveryViewState
+    RecoveryPresenter --> RecoveryViewModel
     DockerRecoveryGateway ..|> ContainerStateReader
     DockerRecoveryGateway ..|> ContainerOperator
     JsonRecoveryRecordRepository ..|> RecoveryRecordRepository
@@ -481,7 +481,7 @@ executor, so UC3 can continue processing failures while Docker is busy. Verifica
 incident in one shared-worker task. The application drains accepted monitoring and recovery work before closing
 the shared worker.
 
-The controller tracks the active request. The presenter formats its result into immutable `RecoveryViewState`
+The controller tracks the active request. The presenter formats its result into immutable `RecoveryViewModel`
 and delivers it on the Swing EDT. The panel drops responses for selections that changed while work was in flight.
 
 ### Recovery record persistence

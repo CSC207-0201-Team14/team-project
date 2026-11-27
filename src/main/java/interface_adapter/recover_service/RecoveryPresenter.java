@@ -27,12 +27,12 @@ public final class RecoveryPresenter implements RecoveryOutputBoundary {
         preview = null;
     }
 
-    void publish(CompletionStage<Void> work, Consumer<RecoveryViewState> listener) {
+    void publish(CompletionStage<Void> work, Consumer<RecoveryViewModel> listener) {
         work.whenComplete((ignored, failure) -> {
             if (failure != null) {
                 presentError("Could not complete the recovery request. " + failure.getMessage());
             }
-            RecoveryViewState state = new RecoveryViewState(text.toString(), preview);
+            RecoveryViewModel state = new RecoveryViewModel(text.toString(), preview);
             uiThread.execute(() -> listener.accept(state));
         });
     }

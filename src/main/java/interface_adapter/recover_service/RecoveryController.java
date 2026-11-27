@@ -23,23 +23,23 @@ public final class RecoveryController {
         this.presenter = presenter;
     }
 
-    public void preview(UUID incidentId, UUID actionId, Consumer<RecoveryViewState> show) {
+    public void preview(UUID incidentId, UUID actionId, Consumer<RecoveryViewModel> show) {
         submit(() -> recovery.previewRecovery(incidentId, actionId), show);
     }
 
-    public void confirm(RecoveryPreview preview, Consumer<RecoveryViewState> show) {
+    public void confirm(RecoveryPreview preview, Consumer<RecoveryViewModel> show) {
         submit(() -> recovery.executeRecovery(new RecoveryRequest(preview)), show);
     }
 
-    public void beginManualVerification(UUID incidentId, Consumer<RecoveryViewState> show) {
+    public void beginManualVerification(UUID incidentId, Consumer<RecoveryViewModel> show) {
         submit(() -> recovery.beginManualVerification(incidentId), show);
     }
 
-    public void verify(UUID incidentId, Consumer<RecoveryViewState> show) {
+    public void verify(UUID incidentId, Consumer<RecoveryViewModel> show) {
         submit(() -> recovery.verifyResolution(incidentId), show);
     }
 
-    public void history(UUID incidentId, Consumer<RecoveryViewState> show) {
+    public void history(UUID incidentId, Consumer<RecoveryViewModel> show) {
         submit(() -> recovery.loadHistory(incidentId), show);
     }
 
@@ -49,7 +49,7 @@ public final class RecoveryController {
         return active;
     }
 
-    private void submit(Supplier<CompletionStage<Void>> task, Consumer<RecoveryViewState> show) {
+    private void submit(Supplier<CompletionStage<Void>> task, Consumer<RecoveryViewModel> show) {
         if (!accepting || busy) {
             return;
         }

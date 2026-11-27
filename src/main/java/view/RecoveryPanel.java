@@ -3,7 +3,7 @@ package view;
 import interface_adapter.investigate_incident.IncidentDetailsState;
 import interface_adapter.investigate_incident.IncidentDetailsState.RecoveryChoice;
 import interface_adapter.recover_service.RecoveryController;
-import interface_adapter.recover_service.RecoveryViewState;
+import interface_adapter.recover_service.RecoveryViewModel;
 import use_case.recover_service.RecoveryPreview;
 
 import javax.swing.BoxLayout;
@@ -123,7 +123,7 @@ final class RecoveryPanel extends JPanel {
         }
     }
 
-    private void start(Consumer<Consumer<RecoveryViewState>> operation, boolean refresh) {
+    private void start(Consumer<Consumer<RecoveryViewModel>> operation, boolean refresh) {
         long requestedSelection = selection;
         preview = null;
         busy = true;
