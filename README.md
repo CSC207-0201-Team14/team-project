@@ -232,13 +232,23 @@ Requires JDK 11 or later and Maven. Run every command from the project root.
 mvn compile exec:java "-Dexec.mainClass=app.Sentinel"
 ```
 
-The window has one tab per use case: Configure (UC1), Monitor (UC2), Incidents (UC3) and Recover (UC4).
-Monitor supports single and periodic HTTP/Docker checks for selected saved services. Recover remains a
-placeholder in this version. Configurations, observations and incidents are saved under `~/.sentinel`.
-Docker checks require a running Docker Desktop/Engine; HTTP checks can run independently. See the
-[UC2 architecture document](docs/uc2-service-health-monitoring.md) for outcome rules, persistence and setup.
+The window has **Configure**, **Monitor**, and **Incidents** tabs. Monitor supports single and periodic
+HTTP and Docker checks for selected saved services. Docker checks require a running Docker Desktop or
+Engine. HTTP checks can run independently. See the
+[UC2 architecture document](docs/uc2-service-health-monitoring.md) for outcomes, persistence, and setup.
 
-**Run the checks:** the tests are plain `main` programs. Compile them and copy the runtime dependencies next to the classes:
+Open **Incidents**, select a monitored system and an unresolved incident, then choose a recovery
+recommendation and click **Preview**. Review the container and proposed operation before confirming.
+If Docker or configuration reports a changed target or operation, Sentinel offers an updated preview for
+confirmation. Recommendations refresh with incident details and omit services whose recent checks meet
+their recovery threshold.
+
+Keep monitoring the affected services, then click **Verify recovery** to evaluate the fresh checks.
+After an external fix, click **Begin manual verification** before collecting fresh checks.
+**Recovery history** shows the recorded attempts and verification start, including after restart.
+Sentinel stores its local data in the `~/.sentinel` directory and recovery records in `~/.sentinel/recovery`.sentinel`.
+
+**Run the checks:** the tests are plain `main` programs. Compile them and copy their dependencies next to the classes once:
 
 ```
 mvn test-compile dependency:copy-dependencies
@@ -248,6 +258,11 @@ Then run any check class, for example the UC3 suite:
 
 - PowerShell or Command Prompt: `java -cp "target/classes;target/test-classes;target/dependency/*" use_case.investigate_incident.InvestigateIncidentCheckSuite`
 - macOS or Linux: `java -cp "target/classes:target/test-classes:target/dependency/*" use_case.investigate_incident.InvestigateIncidentCheckSuite`
+
+For UC4, use the same classpath with `use_case.recover_service.RecoveryInteractorChecks`,
+`use_case.recover_service.RecoveryVerificationChecks`,
+`data_access.persistence.JsonRecoveryRecordRepositoryChecks`, and
+`data_access.docker.DockerEngineInspectorChecks`. The Docker checks use a simulated Engine.
 
 ---
 
